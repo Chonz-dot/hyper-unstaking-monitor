@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # Redis服务
   redis:
     image: redis:7-alpine
     container_name: hype-monitor-redis
@@ -15,6 +16,79 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    networks:
+      - hype-monitor-network
+
+  # HYPE监控服务
+  hype-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hype-monitor-app
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+      REDIS_KEY_PREFIX: "hype_monitor:"
+      WEBHOOK_URL: "${WEBHOOK_URL:-https://httpbin.org/post}"
+      WEBHOOK_TIMEOUT: "${WEBHOOK_TIMEOUT:-5000}"
+      WEBHOOK_RETRIES: "${WEBHOOK_RETRIES:-3}"
+      SINGLE_TRANSFER_THRESHOLD: "${SINGLE_TRANSFER_THRESHOLD:-10000}"
+      DAILY_CUMULATIVE_THRESHOLD: "${DAILY_CUMULATIVE_THRESHOLD:-50000}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      LOG_FILE: "logs/hype-monitor.log"
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    networks:
+      - hype-monitor-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # 开发服务（可选）
+  hype-monitor-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.multistage
+      target: development
+    container_name: hype-monitor-dev
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      REDIS_URL: redis://redis:6379
+      REDIS_KEY_PREFIX: "hype_monitor_dev:"
+      LOG_LEVEL: debug
+      WEBHOOK_URL: "${WEBHOOK_URL:-https://httpbin.org/post}"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    networks:
+      - hype-monitor-network
+    profiles:
+      - dev
 
 volumes:
   redis_data:
+    driver: local
+
+networks:
+  hype-monitor-network:
+    driver: bridge

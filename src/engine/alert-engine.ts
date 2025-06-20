@@ -3,6 +3,7 @@ import CacheManager from '../cache';
 import WebhookNotifier from '../webhook';
 import logger from '../logger';
 import config from '../config';
+import { SYSTEM_START_TIME } from '../index';
 
 export class AlertEngine {
   private rules: AlertRule[];
@@ -29,8 +30,8 @@ export class AlertEngine {
       },
       {
         type: 'cumulative_transfer',
-        threshold: config.monitoring.dailyThreshold,
-        timeWindow: 24, // 24小时
+        threshold: config.monitoring.cumulative24hThreshold,
+        timeWindow: 24, // 24小时滚动窗口
         enabled: true,
       },
     ];
@@ -39,7 +40,8 @@ export class AlertEngine {
       rulesCount: this.rules.length,
       addressesCount: this.addressMap.size,
       singleThreshold: config.monitoring.singleThreshold,
-      dailyThreshold: config.monitoring.dailyThreshold,
+      cumulative24hThreshold: config.monitoring.cumulative24hThreshold,
+      systemStartTime: new Date(SYSTEM_START_TIME).toISOString(),
     });
   }
 
@@ -49,6 +51,16 @@ export class AlertEngine {
       const addressInfo = this.addressMap.get(event.address.toLowerCase());
       if (!addressInfo) {
         logger.warn(`未知地址的事件: ${event.address}`);
+        return;
+      }
+
+      // 过滤系统启动前的历史事件
+      if (event.blockTime < SYSTEM_START_TIME) {
+        logger.debug(`跳过系统启动前的历史事件: ${event.hash.substring(0, 10)}...`, {
+          eventTime: new Date(event.blockTime).toISOString(),
+          systemStartTime: new Date(SYSTEM_START_TIME).toISOString(),
+          address: addressInfo.label
+        });
         return;
       }
 
@@ -68,9 +80,9 @@ export class AlertEngine {
       // 标记交易为已处理
       await this.cache.markTransactionProcessed(event.hash);
 
-      // 更新缓存
+      // 更新缓存（使用事件的实际时间戳）
       const direction = event.eventType.includes('in') ? 'in' : 'out';
-      await this.cache.updateDailyCache(event.address, event.amount, event.hash, direction);
+      await this.cache.updateDailyCache(event.address, event.amount, event.hash, direction, event.blockTime);
 
       // 检查预警规则
       await Promise.all([
@@ -126,11 +138,11 @@ export class AlertEngine {
     const rule = this.rules.find(r => r.type === 'cumulative_transfer' && r.enabled);
     if (!rule) return;
 
-    // 获取今日累计数据
+    // 获取48小时累计数据
     const dailyCache = await this.cache.getDailyCache(event.address);
     if (!dailyCache) return;
 
-    const threshold = addressInfo.customThresholds?.dailyTotal || rule.threshold;
+    const threshold = addressInfo.customThresholds?.cumulative24h || rule.threshold;
     const direction = event.eventType.includes('in') ? 'in' : 'out';
     const cumulativeAmount = parseFloat(
       direction === 'in' ? dailyCache.totalInbound : dailyCache.totalOutbound
@@ -158,6 +170,7 @@ export class AlertEngine {
         cumulativeAmount,
         threshold,
         direction,
+        timeWindow: '24h'
       });
 
       await this.notifier.sendAlert(alert);
@@ -185,6 +198,13 @@ export class AlertEngine {
       activeRules: this.rules.filter(r => r.enabled).length,
       dailyStats,
     };
+  }
+
+  // 获取24小时窗口开始时间戳（基于系统启动时间）
+  private get24HourWindowStart(): number {
+    const now = Date.now();
+    const hoursFromStart = Math.floor((now - SYSTEM_START_TIME) / (24 * 60 * 60 * 1000));
+    return SYSTEM_START_TIME + (hoursFromStart * 24 * 60 * 60 * 1000);
   }
 }
 

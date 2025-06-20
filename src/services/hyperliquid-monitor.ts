@@ -1,7 +1,9 @@
 import * as hl from '@nktkas/hyperliquid';
 import { MonitorEvent } from '../types';
+import HyperliquidDataParser from '../utils/data-parser';
 import logger from '../logger';
 import config from '../config';
+import { EventEmitter } from 'events';
 
 export class HyperliquidMonitor {
   private client: hl.SubscriptionClient;
@@ -13,6 +15,9 @@ export class HyperliquidMonitor {
 
   constructor(eventCallback: (event: MonitorEvent) => Promise<void>) {
     this.eventCallback = eventCallback;
+
+    // 增加事件监听器限制以支持26个地址订阅
+    EventEmitter.defaultMaxListeners = 50;
 
     // 初始化WebSocket传输
     this.transport = new hl.WebSocketTransport({
@@ -136,17 +141,25 @@ export class HyperliquidMonitor {
 
   private async handleUserEvents(data: any, address: string, label: string): Promise<void> {
     try {
-      logger.debug(`收到用户事件: ${label}`, { data });
-
-      // 这里需要解析data结构来提取转账信息
-      // 具体实现需要根据实际的WebSocket数据格式
-      if (this.isHypeTransferEvent(data)) {
-        const event = this.parseTransferEvent(data, address);
-        if (event) {
+      logger.debug(`收到用户事件: ${label}`, { dataKeys: Object.keys(data) });
+      
+      // 使用数据解析器处理用户成交数据
+      const events = HyperliquidDataParser.parseUserEvents(data, address);
+      const hypeEvents = HyperliquidDataParser.filterHypeEvents(events);
+      
+      for (const event of hypeEvents) {
+        if (HyperliquidDataParser.shouldMonitorEvent(event)) {
+          const summary = HyperliquidDataParser.createEventSummary(event);
+          logger.info(`检测到HYPE交易: ${label} - ${summary}`, {
+            txHash: event.hash.substring(0, 10) + '...',
+            amount: event.amount,
+            type: event.eventType
+          });
+          
           await this.eventCallback(event);
         }
       }
-
+      
     } catch (error) {
       logger.error(`处理用户事件失败 ${label}:`, error);
     }
@@ -154,16 +167,29 @@ export class HyperliquidMonitor {
 
   private async handleLedgerUpdates(data: any, address: string, label: string): Promise<void> {
     try {
-      logger.debug(`收到账本更新: ${label}`, { data });
-
-      // 解析账本更新中的HYPE转账信息
-      if (this.isHypeLedgerUpdate(data)) {
-        const event = this.parseLedgerUpdate(data, address);
-        if (event) {
+      logger.debug(`收到账本更新: ${label}`, { 
+        updateCount: data.nonFundingLedgerUpdates?.length || 0,
+        isSnapshot: data.isSnapshot 
+      });
+      
+      // 使用数据解析器处理账本更新数据
+      const events = HyperliquidDataParser.parseUserNonFundingLedgerUpdates(data, address);
+      const hypeEvents = HyperliquidDataParser.filterHypeEvents(events);
+      
+      for (const event of hypeEvents) {
+        if (HyperliquidDataParser.shouldMonitorEvent(event)) {
+          const summary = HyperliquidDataParser.createEventSummary(event);
+          logger.info(`检测到HYPE转账: ${label} - ${summary}`, {
+            txHash: event.hash.substring(0, 10) + '...',
+            amount: event.amount,
+            type: event.eventType,
+            counterparty: event.metadata?.counterparty
+          });
+          
           await this.eventCallback(event);
         }
       }
-
+      
     } catch (error) {
       logger.error(`处理账本更新失败 ${label}:`, error);
     }
@@ -171,50 +197,32 @@ export class HyperliquidMonitor {
 
   private async handleUserFills(data: any, address: string, label: string): Promise<void> {
     try {
-      logger.debug(`收到用户成交: ${label}`, { data });
-
-      // 检查是否是HYPE现货买入
-      if (this.isHypeSpotBuy(data)) {
-        const event = this.parseSpotBuyEvent(data, address);
-        if (event) {
+      logger.debug(`收到用户成交: ${label}`, { 
+        fillCount: data.fills?.length || 0,
+        isSnapshot: data.isSnapshot 
+      });
+      
+      // 使用数据解析器处理用户成交数据
+      const events = HyperliquidDataParser.parseUserEvents(data, address);
+      const hypeEvents = HyperliquidDataParser.filterHypeEvents(events);
+      
+      for (const event of hypeEvents) {
+        if (HyperliquidDataParser.shouldMonitorEvent(event)) {
+          const summary = HyperliquidDataParser.createEventSummary(event);
+          logger.info(`检测到HYPE成交: ${label} - ${summary}`, {
+            txHash: event.hash.substring(0, 10) + '...',
+            amount: event.amount,
+            type: event.eventType,
+            price: event.metadata?.price
+          });
+          
           await this.eventCallback(event);
         }
       }
-
+      
     } catch (error) {
       logger.error(`处理用户成交失败 ${label}:`, error);
     }
-  }
-
-  private isHypeTransferEvent(data: any): boolean {
-    // 实现HYPE转账事件检测逻辑
-    // 需要根据实际WebSocket数据格式来实现
-    return false; // 临时返回false，需要实际数据结构来完善
-  }
-
-  private isHypeLedgerUpdate(data: any): boolean {
-    // 实现HYPE账本更新检测逻辑
-    return false; // 临时返回false，需要实际数据结构来完善
-  }
-
-  private isHypeSpotBuy(data: any): boolean {
-    // 检查是否是HYPE现货买入（@107资产）
-    return false; // 临时返回false，需要实际数据结构来完善
-  }
-
-  private parseTransferEvent(data: any, address: string): MonitorEvent | null {
-    // 解析转账事件数据
-    return null; // 需要实际数据结构来实现
-  }
-
-  private parseLedgerUpdate(data: any, address: string): MonitorEvent | null {
-    // 解析账本更新数据
-    return null; // 需要实际数据结构来实现
-  }
-
-  private parseSpotBuyEvent(data: any, address: string): MonitorEvent | null {
-    // 解析现货买入事件数据
-    return null; // 需要实际数据结构来实现
   }
 
   // 获取监控状态

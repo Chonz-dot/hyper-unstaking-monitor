@@ -6,6 +6,9 @@ import logger from './logger';
 import config from './config';
 import { MonitorEvent } from './types';
 
+// 全局系统启动时间
+export const SYSTEM_START_TIME = Date.now();
+
 class HypeUnstakingMonitor {
   private hyperliquidMonitor: HyperliquidMonitor;
   private alertEngine: AlertEngine;
@@ -55,9 +58,11 @@ class HypeUnstakingMonitor {
       this.isRunning = true;
 
       logger.info('HYPE解锁监控系统启动成功', {
+        systemStartTime: new Date(SYSTEM_START_TIME).toISOString(),
         addressCount: config.monitoring.addresses.length,
         singleThreshold: config.monitoring.singleThreshold,
-        dailyThreshold: config.monitoring.dailyThreshold,
+        cumulative24hThreshold: config.monitoring.cumulative24hThreshold,
+        timeWindow: '24小时滚动窗口（从启动时间开始）'
       });
 
       // 定期更新状态

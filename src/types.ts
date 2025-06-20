@@ -5,7 +5,7 @@ export interface WatchedAddress {
   unlockAmount: number; // 解锁数量
   customThresholds?: {
     singleTransfer: number;
-    dailyTotal: number;
+    cumulative24h: number;
   };
   isActive: boolean;
 }
@@ -14,11 +14,14 @@ export interface WatchedAddress {
 export interface MonitorEvent {
   timestamp: number;
   address: string;
-  eventType: 'transfer_in' | 'transfer_out' | 'trade_buy' | 'unstake';
+  eventType: 'transfer_in' | 'transfer_out' | 'trade_buy' | 'trade_sell' | 'unstake' | 'deposit' | 'withdraw' | 'internal_transfer_in' | 'internal_transfer_out';
   amount: string;
   hash: string;
   blockTime: number;
   asset?: string; // 资产类型，如"HYPE"
+  metadata?: {
+    [key: string]: any; // 额外的元数据
+  };
 }
 
 // 预警规则
@@ -42,7 +45,7 @@ export interface WebhookAlert {
   unlockAmount?: number; // 该地址的解锁数量
 }
 
-// 日缓存结构
+// 24小时缓存结构
 export interface DailyCache {
   [address: string]: {
     totalInbound: string;
@@ -74,7 +77,7 @@ export interface Config {
   };
   monitoring: {
     singleThreshold: number;
-    dailyThreshold: number;
+    cumulative24hThreshold: number;
     addresses: WatchedAddress[];
   };
   logging: {

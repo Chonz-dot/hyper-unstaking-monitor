@@ -1,0 +1,67 @@
+# Docker相关文件
+Dockerfile*
+docker-compose*.yml
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 构建输出
+dist/
+build/
+
+# 环境变量文件
+.env
+
+# 日志文件  
+logs/
+*.log
+
+# 测试文件
+tests/
+test-*.ts
+test-*.js
+
+# 运行时文件
+*.pid
+*.seed
+*.pid.lock
+
+# 覆盖率目录
+coverage/
+.nyc_output
+
+# IDE和编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统生成的文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp
+
+# Redis数据
+dump.rdb
+
+# TypeScript编译信息
+*.tsbuildinfo
+
+# Docker相关
+.dockerignore
+
+# Git
+.git/
+.gitignore

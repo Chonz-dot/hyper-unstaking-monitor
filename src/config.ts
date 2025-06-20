@@ -50,7 +50,7 @@ export const config: Config = {
   },
   monitoring: {
     singleThreshold: parseFloat(process.env.SINGLE_TRANSFER_THRESHOLD || '10000'),
-    dailyThreshold: parseFloat(process.env.DAILY_CUMULATIVE_THRESHOLD || '50000'),
+    cumulative24hThreshold: parseFloat(process.env.CUMULATIVE_24H_THRESHOLD || '50000'),
     addresses: WATCHED_ADDRESSES,
   },
   logging: {

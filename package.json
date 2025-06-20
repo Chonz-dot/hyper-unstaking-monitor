@@ -9,12 +9,17 @@
     "start": "node dist/index.js",
     "test": "jest",
     "test:basic": "tsx tests/basic.test.ts",
-    "test:webhook": "tsx tests/webhook.test.ts", 
+    "test:webhook": "tsx tests/webhook.test.ts",
     "test:engine": "tsx tests/alert-engine.test.ts",
-    "test:all": "npm run test:basic && npm run test:webhook && npm run test:engine",
+    "test:redis": "tsx tests/redis.test.ts",
+    "test:all": "npm run test:basic && npm run test:webhook && npm run test:engine && npm run test:redis",
+    "docker:start": "./docker-start.sh",
+    "docker:build": "docker-compose build",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
-    "docker:logs": "docker-compose logs -f"
+    "docker:logs": "docker-compose logs -f",
+    "docker:ps": "docker-compose ps",
+    "docker:restart": "docker-compose restart"
   },
   "keywords": [
     "hyperliquid",
@@ -27,12 +32,13 @@
   "license": "MIT",
   "dependencies": {
     "@nktkas/hyperliquid": "^0.22.2",
+    "@types/ws": "^8.18.1",
     "axios": "^1.6.5",
     "dotenv": "^16.3.1",
     "hyperliquid": "^1.4.0",
     "redis": "^4.6.12",
     "winston": "^3.11.0",
-    "ws": "^8.16.0"
+    "ws": "^8.18.2"
   },
   "devDependencies": {
     "@types/jest": "^29.5.11",
