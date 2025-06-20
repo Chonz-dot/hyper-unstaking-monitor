@@ -1,4 +1,5 @@
 import HyperliquidMonitor from './services/hyperliquid-monitor';
+import BatchedHyperliquidMonitor from './services/hyperliquid-monitor';
 import AlertEngine from './engine/alert-engine';
 import CacheManager from './cache';
 import WebhookNotifier from './webhook';
@@ -10,7 +11,7 @@ import { MonitorEvent } from './types';
 export const SYSTEM_START_TIME = Date.now();
 
 class HypeUnstakingMonitor {
-  private hyperliquidMonitor: HyperliquidMonitor;
+  private hyperliquidMonitor: BatchedHyperliquidMonitor;
   private alertEngine: AlertEngine;
   private cache: CacheManager;
   private notifier: WebhookNotifier;
@@ -22,7 +23,7 @@ class HypeUnstakingMonitor {
     this.cache = new CacheManager();
     this.notifier = new WebhookNotifier();
     this.alertEngine = new AlertEngine(this.cache, this.notifier);
-    this.hyperliquidMonitor = new HyperliquidMonitor(this.handleEvent.bind(this));
+    this.hyperliquidMonitor = new BatchedHyperliquidMonitor(this.handleEvent.bind(this));
 
     logger.info('HYPE解锁监控系统初始化完成');
   }
@@ -40,12 +41,6 @@ class HypeUnstakingMonitor {
       // 连接Redis
       await this.cache.connect();
 
-      // 测试Webhook连接
-      const webhookTest = await this.notifier.testConnection();
-      if (!webhookTest) {
-        logger.warn('Webhook连接测试失败，但继续启动监控');
-      }
-
       // 更新监控状态
       await this.cache.updateMonitoringStatus({
         startTime: this.startTime,
@@ -62,7 +57,9 @@ class HypeUnstakingMonitor {
         addressCount: config.monitoring.addresses.length,
         singleThreshold: config.monitoring.singleThreshold,
         cumulative24hThreshold: config.monitoring.cumulative24hThreshold,
-        timeWindow: '24小时滚动窗口（从启动时间开始）'
+        timeWindow: '24小时滚动窗口（从启动时间开始）',
+        monitoringType: 'BatchedWebSocket',
+        batchInfo: this.hyperliquidMonitor.getStatus()
       });
 
       // 定期更新状态

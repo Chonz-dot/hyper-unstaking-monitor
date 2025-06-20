@@ -207,3 +207,239 @@ npm run docker:logs
 **版本**: 1.0.0  
 **最后更新**: 2025年6月  
 **开发者**: Edison
+### 调试技巧
+
+```bash
+# 设置调试级别
+export LOG_LEVEL=debug
+
+# 查看详细日志
+./manage.sh logs
+
+# 测试Webhook连接
+curl -X POST $WEBHOOK_URL \
+  -H "Content-Type: application/json" \
+  -d '{"test": "webhook connection"}'
+
+# 检查Redis连接
+redis-cli ping
+
+# 监控WebSocket连接
+./manage.sh status
+```
+
+### 常见问题排查
+
+**1. WebSocket连接失败**
+```bash
+# 检查网络连接
+ping api.hyperliquid.xyz
+
+# 查看错误日志
+grep "WebSocket" logs/monitor.log
+```
+
+**2. Redis连接问题**
+```bash
+# 检查Redis服务
+systemctl status redis
+# 或
+brew services list | grep redis
+
+# 测试连接
+redis-cli -u $REDIS_URL ping
+```
+
+**3. Webhook发送失败**
+```bash
+# 检查Webhook配置
+grep "WEBHOOK" .env
+
+# 查看发送日志
+grep "webhook" logs/monitor.log
+```
+
+## 📈 监控指标
+
+### 系统指标
+
+- **连接状态**：WebSocket连接数和状态
+- **处理性能**：事件处理延迟和吞吐量
+- **缓存使用**：Redis内存使用和命中率
+- **警报统计**：触发次数和类型分布
+
+### 业务指标
+
+- **转账监控**：单笔和累计转账量
+- **地址活跃度**：各地址转账频率
+- **时间分布**：转账时间模式分析
+- **异常检测**：大额转账预警统计
+
+## 🔒 安全建议
+
+### 生产环境配置
+
+```bash
+# 设置严格的文件权限
+chmod 600 .env
+chmod 755 manage.sh
+
+# 使用环境变量而非硬编码
+export REDIS_PASSWORD="your-secure-password"
+export WEBHOOK_SECRET="your-webhook-secret"
+
+# 启用日志轮转
+# 在 /etc/logrotate.d/hype-monitor 中配置
+```
+
+### 网络安全
+
+- 使用HTTPS Webhook端点
+- 配置Redis密码认证
+- 限制服务器出入站规则
+- 定期更新依赖包安全补丁
+
+## 🚨 故障处理
+
+### 自动恢复机制
+
+系统内置多层故障恢复：
+
+1. **WebSocket重连**：自动重连，指数退避
+2. **批次隔离**：单批次失败不影响其他批次
+3. **缓存容错**：Redis不可用时降级处理
+4. **Webhook重试**：失败自动重试，最大3次
+
+### 手动恢复
+
+```bash
+# 重启所有服务
+./manage.sh restart
+
+# 清理并重启
+./manage.sh clean
+./manage.sh install
+./manage.sh pm2
+
+# 检查系统状态
+./manage.sh status
+./manage.sh logs
+```
+
+## 📝 更新日志
+
+### v1.2.0 (最新) - 2025-06-20
+
+**🎯 主要更新**
+- ✅ **修复误报问题**：优化数据解析器，过滤订单修改事件
+- ✅ **统一管理脚本**：新增 `manage.sh` 脚本，简化操作
+- ✅ **项目结构优化**：清理不必要文件，精简目录结构
+- ✅ **事件过滤增强**：只监控真实转账事件
+
+**🔧 技术改进**
+- 改进 `HyperliquidDataParser` 事件过滤逻辑
+- 优化 WebSocket 事件处理流程
+- 增强日志记录和错误处理
+- 标准化项目管理命令
+
+**📋 文件变更**
+- 新增：`manage.sh` - 统一管理脚本
+- 更新：`src/utils/data-parser.ts` - 优化事件过滤
+- 更新：`src/services/hyperliquid-monitor.ts` - 改进事件处理
+- 移除：`dev.sh`, `start.sh`, `restart.sh`, `deploy.sh` - 合并到管理脚本
+- 清理：`dist/`, `tests/` - 构建产物和测试目录
+
+### v1.1.0 - 2025-06-15
+- 批量监控支持
+- Redis缓存优化
+- Webhook重试机制
+
+### v1.0.0 - 2025-06-10
+- 基础监控功能
+- 预警引擎
+- Docker支持
+
+## 🤝 贡献指南
+
+### 开发流程
+
+1. **Fork项目**并创建特性分支
+2. **本地开发**：`./manage.sh dev`
+3. **运行测试**：`./manage.sh test`（如果有测试）
+4. **提交代码**：遵循[Conventional Commits](https://conventionalcommits.org/)规范
+5. **创建PR**：描述变更内容和测试结果
+
+### 代码规范
+
+```bash
+# 代码格式化
+npm run format
+
+# 类型检查
+npm run type-check
+
+# 代码检查
+npm run lint
+```
+
+## 📄 许可证
+
+本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
+
+## 📞 技术支持
+
+- **文档问题**：查看 `masterplan.md` 需求文档
+- **部署问题**：查看 `DEPLOYMENT.md` 部署指南
+- **日志分析**：使用 `./manage.sh logs` 查看运行日志
+- **性能调优**：调整批次大小和缓存配置
+
+## 🎯 路线图
+
+### 近期计划
+
+- [ ] Web管理界面
+- [ ] 更多通知渠道（Telegram、Discord）
+- [ ] 监控数据可视化
+- [ ] 历史数据查询API
+
+### 长期规划
+
+- [ ] 多链监控支持
+- [ ] 机器学习异常检测
+- [ ] 高可用集群部署
+- [ ] 实时监控仪表板
+
+---
+
+## 🔗 相关链接
+
+- [Hyperliquid官方文档](https://hyperliquid.gitbook.io/)
+- [WebSocket API参考](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket)
+- [Redis文档](https://redis.io/documentation)
+- [PM2进程管理](https://pm2.keymetrics.io/)
+
+---
+
+**⚡ 快速命令参考：**
+
+```bash
+# 🚀 常用操作
+./manage.sh dev          # 开发模式
+./manage.sh pm2          # 生产启动
+./manage.sh logs         # 查看日志
+./manage.sh status       # 服务状态
+./manage.sh deploy       # 一键部署
+./manage.sh clean        # 清理文件
+
+# 📊 监控操作
+./manage.sh restart      # 重启服务
+./manage.sh stop         # 停止服务
+curl $WEBHOOK_URL        # 测试Webhook
+redis-cli ping           # 测试Redis
+```
+
+> 💡 **提示**：使用 `./manage.sh` 查看所有可用命令和使用说明
+
+---
+
+*最后更新：2025-06-20*

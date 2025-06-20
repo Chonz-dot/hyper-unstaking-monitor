@@ -56,19 +56,27 @@ export class AlertEngine {
 
       // 过滤系统启动前的历史事件
       if (event.blockTime < SYSTEM_START_TIME) {
-        logger.debug(`跳过系统启动前的历史事件: ${event.hash.substring(0, 10)}...`, {
+        logger.info(`🔄 跳过系统启动前的历史事件: ${addressInfo.label}`, {
+          fullTxHash: event.hash,
+          shortTxHash: event.hash.substring(0, 10) + '...',
+          amount: event.amount,
+          eventType: event.eventType,
           eventTime: new Date(event.blockTime).toISOString(),
           systemStartTime: new Date(SYSTEM_START_TIME).toISOString(),
-          address: addressInfo.label
+          timeDiff: Math.round((SYSTEM_START_TIME - event.blockTime) / 1000) + 's ago'
         });
         return;
       }
 
-      logger.debug('处理监控事件', {
+      logger.info('🎯 处理实时监控事件', {
         address: addressInfo.label,
+        fullAddress: event.address,
         eventType: event.eventType,
         amount: event.amount,
-        txHash: event.hash.substring(0, 10) + '...',
+        fullTxHash: event.hash,
+        shortTxHash: event.hash.substring(0, 10) + '...',
+        blockTime: new Date(event.blockTime).toISOString(),
+        systemStartTime: new Date(SYSTEM_START_TIME).toISOString()
       });
 
       // 检查交易是否已处理（去重）
@@ -114,11 +122,11 @@ export class AlertEngine {
         timestamp: event.timestamp,
         alertType,
         address: event.address,
-        addressLabel: addressInfo.label,
+        addressLabel: addressInfo.label || `地址 ${event.address.substring(0, 10)}...`,
         amount: event.amount,
         txHash: event.hash,
         blockTime: event.blockTime,
-        unlockAmount: addressInfo.unlockAmount,
+        unlockAmount: addressInfo.unlockAmount || 0,
       };
 
       logger.info(`触发单笔转账预警: ${alertType}`, {
@@ -157,12 +165,12 @@ export class AlertEngine {
         timestamp: event.timestamp,
         alertType,
         address: event.address,
-        addressLabel: addressInfo.label,
+        addressLabel: addressInfo.label || `地址 ${event.address.substring(0, 10)}...`,
         amount: event.amount,
         txHash: event.hash,
         blockTime: event.blockTime,
         cumulativeToday: cumulativeAmount.toString(),
-        unlockAmount: addressInfo.unlockAmount,
+        unlockAmount: addressInfo.unlockAmount || 0,
       };
 
       logger.info(`触发累计转账预警: ${alertType}`, {

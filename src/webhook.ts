@@ -25,7 +25,7 @@ export class WebhookNotifier {
     }
 
     let lastError: Error | null = null;
-    
+
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
         await this.makeRequest(alert);
@@ -35,7 +35,7 @@ export class WebhookNotifier {
           txHash: alert.txHash.substring(0, 10) + '...',
         });
         return;
-        
+
       } catch (error) {
         lastError = error as Error;
         logger.warn(`警报发送失败 (尝试 ${attempt}/${this.maxRetries}):`, {
@@ -61,21 +61,89 @@ export class WebhookNotifier {
   }
 
   private async makeRequest(alert: WebhookAlert): Promise<void> {
-    const payload = {
-      ...alert,
-      // 添加一些额外的元数据
-      metadata: {
-        system: 'hype-unstaking-monitor',
-        version: '1.0.0',
-        timestamp_iso: new Date(alert.timestamp).toISOString(),
-      },
+    // 格式化金额显示
+    const formatAmount = (amount: string) => {
+      const num = parseFloat(amount);
+      return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
     };
 
-    const response = await axios.post(this.webhookUrl, payload, {
+    // 计算占解锁总量的百分比
+    const calculatePercentage = (amount: string, total?: number) => {
+      if (!total || total === 0) return '';
+      const percentage = (parseFloat(amount) / total) * 100;
+      return ` (${percentage.toFixed(4)}% of unlock amount)`;
+    };
+
+    // 确定警报级别和类型
+    const isTransferIn = alert.alertType.includes('_in');
+    const isSingle = alert.alertType.includes('single_');
+
+    // 警报级别判定
+    let alertLevel = 'LOW';
+    let alertEmoji = 'ℹ️';
+
+    if (parseFloat(alert.amount) >= 100000) {
+      alertLevel = 'HIGH';
+      alertEmoji = '🚨';
+    } else if (parseFloat(alert.amount) >= 50000) {
+      alertLevel = 'MEDIUM';
+      alertEmoji = '⚠️';
+    }
+
+    const actionText = isTransferIn ? 'Transfer In' : 'Transfer Out';
+    const thresholdType = isSingle ? 'Large Single' : '24h Cumulative';
+    const directionEmoji = isTransferIn ? '📈' : '📉';
+
+    // 构建简化的消息内容（移除折叠部分）
+    const messageLines = [
+      `${alertEmoji} ${alertEmoji} ${alertLevel} ALERT: ${thresholdType} ${actionText}`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `🌐 Network: Hyperliquid`,
+      `Token: HYPE`,
+      `Amount: ${formatAmount(alert.amount)}${calculatePercentage(alert.amount, alert.unlockAmount)}`,
+      `Address: ${alert.address} (${alert.addressLabel || 'Unknown'})`,
+      `${alert.unlockAmount ? `Unlock Total: ${formatAmount(alert.unlockAmount.toString())} HYPE` : ''}`,
+      `Transaction: ${alert.txHash}`,
+      `Time: ${new Date(alert.blockTime).toISOString()}`,
+      `${alert.cumulativeToday ? `24h Cumulative: ${formatAmount(alert.cumulativeToday)} HYPE` : ''}`,
+      `Explorer Link: https://hypurrscan.io/tx/${alert.txHash}`
+    ].filter(line => line !== ''); // 过滤空行
+
+    // 简化的 payload，移除复杂的 attachments 和折叠部分
+    const simplePayload = {
+      text: messageLines.join('\n'),
+      username: 'HYPE Monitor',
+      icon_emoji: ':robot:',
+      // 保留基本的元数据
+      alert_info: {
+        alert_level: alertLevel,
+        amount: formatAmount(alert.amount),
+        network: 'Hyperliquid',
+        address_label: alert.addressLabel || 'Unknown',
+        address: alert.address,
+        transaction_hash: alert.txHash,
+        unlock_amount: alert.unlockAmount ? formatAmount(alert.unlockAmount.toString()) : null,
+        percentage: alert.unlockAmount ? ((parseFloat(alert.amount) / alert.unlockAmount) * 100).toFixed(4) + '%' : null,
+        cumulative_24h: alert.cumulativeToday ? formatAmount(alert.cumulativeToday) : null,
+        explorer_link: `https://hypurrscan.io/tx/${alert.txHash}`
+      },
+      // 原始数据
+      raw_alert: alert,
+      metadata: {
+        system: 'hype-unstaking-monitor',
+        version: '1.2.0',
+        timestamp_iso: new Date(alert.timestamp).toISOString(),
+        action_type: actionText,
+        threshold_type: thresholdType,
+        alert_level: alertLevel
+      }
+    };
+
+    const response = await axios.post(this.webhookUrl, simplePayload, {
       timeout: this.timeout,
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'HYPE-Monitor/1.0',
+        'User-Agent': 'HYPE-Monitor/1.2',
       },
     });
 
@@ -92,38 +160,6 @@ export class WebhookNotifier {
 
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  // 测试Webhook连接
-  async testConnection(): Promise<boolean> {
-    if (!this.webhookUrl) {
-      logger.error('Webhook URL未配置，无法测试连接');
-      return false;
-    }
-
-    try {
-      const testPayload = {
-        timestamp: Date.now(),
-        alertType: 'test_connection',
-        message: 'HYPE监控系统连接测试',
-        system: 'hype-unstaking-monitor',
-      };
-
-      await axios.post(this.webhookUrl, testPayload, {
-        timeout: this.timeout,
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'HYPE-Monitor/1.0',
-        },
-      });
-
-      logger.info('Webhook连接测试成功');
-      return true;
-      
-    } catch (error) {
-      logger.error('Webhook连接测试失败:', error);
-      return false;
-    }
   }
 }
 
