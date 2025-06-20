@@ -15,6 +15,10 @@ build/
 logs/*.log
 *.log
 
+# 临时测试文件
+test-*.ts
+test-*.js
+
 # 运行时文件
 *.pid
 *.seed
@@ -49,3 +53,5 @@ dump.rdb
 
 # TypeScript编译信息
 *.tsbuildinfo
+
+masterplan.md

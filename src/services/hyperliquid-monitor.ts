@@ -105,19 +105,19 @@ export class HyperliquidMonitor {
     try {
       // 订阅用户事件（包含转账等信息）
       const userEventsSub = await this.client.userEvents(
-        { user: address },
+        { user: address as `0x${string}` },
         (data) => this.handleUserEvents(data, address, label)
       );
 
       // 订阅用户非资金费用账本更新（包含转账详情）
       const ledgerUpdatesSub = await this.client.userNonFundingLedgerUpdates(
-        { user: address },
+        { user: address as `0x${string}` },
         (data) => this.handleLedgerUpdates(data, address, label)
       );
 
       // 订阅用户成交（用于监控HYPE现货买入）
       const userFillsSub = await this.client.userFills(
-        { user: address },
+        { user: address as `0x${string}` },
         (data) => this.handleUserFills(data, address, label)
       );
 
