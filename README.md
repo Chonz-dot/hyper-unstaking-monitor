@@ -32,7 +32,7 @@ hyper-unstaking-monitor/
 ## 🚀 快速开始
 
 > 💡 **新用户推荐**：查看 [快速启动指南](./quick-start.md) 获取详细的一键启动教程  
-> 🌥️ **云端部署**：如遇到npm镜像源问题，查看 [云端部署指南](./cloud-deployment.md)
+> 🌥️ **云端部署**：如遇端口冲突或npm问题，查看 [云端部署指南](./CLOUD-DEPLOY.md)
 
 ### 方法一：一键快速启动 (推荐)
 

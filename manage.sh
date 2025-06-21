@@ -55,6 +55,57 @@ check_dependencies() {
     fi
 }
 
+# 检查端口占用并处理冲突
+check_and_fix_ports() {
+    print_message "🔍 检查端口占用情况..." $BLUE
+    
+    # 检查Redis端口6379
+    if lsof -i :6379 > /dev/null 2>&1; then
+        print_message "⚠️  端口6379已被占用" $YELLOW
+        
+        # 检查是否是我们自己的Redis容器
+        EXISTING_REDIS=$(docker ps --filter "name=hype-monitor-redis" --format "{{.Names}}" 2>/dev/null || echo "")
+        
+        if [ -n "$EXISTING_REDIS" ]; then
+            print_message "✅ 发现已运行的项目Redis容器，将重用" $GREEN
+        else
+            # 检查是否是其他Redis进程
+            REDIS_PROCESS=$(ps aux | grep redis-server | grep -v grep | head -1 || echo "")
+            
+            if [ -n "$REDIS_PROCESS" ]; then
+                print_message "🔄 发现其他Redis进程占用端口6379" $YELLOW
+                print_message "正在尝试停止冲突的Redis服务..." $YELLOW
+                
+                # 尝试停止本地Redis服务
+                if command -v systemctl &> /dev/null; then
+                    sudo systemctl stop redis 2>/dev/null || true
+                    sudo systemctl stop redis-server 2>/dev/null || true
+                elif command -v service &> /dev/null; then
+                    sudo service redis stop 2>/dev/null || true
+                    sudo service redis-server stop 2>/dev/null || true
+                fi
+                
+                # 再次检查
+                sleep 2
+                if lsof -i :6379 > /dev/null 2>&1; then
+                    print_message "❌ 无法自动解决端口冲突" $RED
+                    print_message "💡 手动解决方案：" $CYAN
+                    echo "1. 查看占用进程: lsof -i :6379"
+                    echo "2. 停止Redis服务: sudo systemctl stop redis"
+                    echo "3. 或杀死进程: sudo kill \$(lsof -t -i:6379)"
+                    return 1
+                else
+                    print_message "✅ 端口冲突已解决" $GREEN
+                fi
+            fi
+        fi
+    else
+        print_message "✅ 端口6379可用" $GREEN
+    fi
+    
+    return 0
+}
+
 # 检查并修复npm镜像源
 fix_npm_registry() {
     local current_registry
@@ -159,6 +210,9 @@ case "$1" in
         print_message "🚀 快速启动生产环境..." $BLUE
         check_docker || exit 1
         
+        # 检查并解决端口冲突
+        check_and_fix_ports || exit 1
+        
         # 检查是否有pnpm命令
         if command -v pnpm &> /dev/null; then
             PACKAGE_MANAGER="pnpm"
@@ -213,9 +267,12 @@ case "$1" in
         ;;
         
     "fix-registry")
-        print_message "🔧 修复npm镜像源问题..." $BLUE
+        print_message "🔧 修复npm镜像源和环境问题..." $BLUE
         
-        print_message "📋 当前配置:" $CYAN
+        # 检查端口占用
+        check_and_fix_ports
+        
+        print_message "📋 当前npm配置:" $CYAN
         echo "npm registry: $(npm config get registry)"
         if command -v pnpm &> /dev/null; then
             echo "pnpm registry: $(pnpm config get registry)"
@@ -235,12 +292,15 @@ case "$1" in
         install_deps_with_retry
         
         if [ $? -eq 0 ]; then
-            print_message "✅ 镜像源修复完成！" $GREEN
+            print_message "✅ 镜像源和环境修复完成！" $GREEN
+            print_message "💡 现在可以运行 './manage.sh quick' 启动服务" $CYAN
         else
             print_message "❌ 修复失败，请检查网络连接" $RED
-            print_message "💡 如果在企业网络环境，可能需要配置代理:" $CYAN
-            echo "   npm config set proxy http://proxy.company.com:8080"
-            echo "   npm config set https-proxy http://proxy.company.com:8080"
+            print_message "💡 可尝试的解决方案:" $CYAN
+            echo "1. 检查网络: ping registry.npmjs.org"
+            echo "2. 配置代理: npm config set proxy http://proxy:port"
+            echo "3. 使用其他镜像源:"
+            echo "   npm config set registry https://mirrors.cloud.tencent.com/npm/"
         fi
         ;;
         
@@ -607,8 +667,8 @@ case "$1" in
         print_message "用法: ./manage.sh {command}" $YELLOW
         echo ""
         print_message "🚀 快速命令:" $PURPLE
-        echo "  quick          - 快速启动 (pnpm build + docker 一键启动)"
-        echo "  fix-registry   - 修复npm镜像源问题"
+        echo "  quick          - 快速启动 (自动检测端口冲突 + pnpm build + docker)"
+        echo "  fix-registry   - 修复npm镜像源和端口冲突问题"
         echo ""
         print_message "🐳 Docker 命令:" $CYAN
         echo "  docker:build   - 构建Docker镜像"
