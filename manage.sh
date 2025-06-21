@@ -55,16 +55,82 @@ check_dependencies() {
     fi
 }
 
-# 安装依赖
-install_deps() {
-    print_message "📦 安装项目依赖..." $BLUE
-    npm install
-    if [ $? -eq 0 ]; then
-        print_message "✅ 依赖安装成功" $GREEN
+# 检查并修复npm镜像源
+fix_npm_registry() {
+    local current_registry
+    
+    if command -v pnpm &> /dev/null; then
+        current_registry=$(pnpm config get registry 2>/dev/null || echo "")
     else
-        print_message "❌ 依赖安装失败" $RED
-        exit 1
+        current_registry=$(npm config get registry)
     fi
+    
+    # 检查是否使用了可能有问题的镜像源
+    if [[ "$current_registry" == *"npmmirror.com"* ]] || [[ "$current_registry" == *"cnpmjs.org"* ]]; then
+        print_message "⚠️  检测到中国镜像源，可能导致某些包下载失败" $YELLOW
+        print_message "🔧 切换到官方镜像源..." $BLUE
+        
+        if command -v pnpm &> /dev/null; then
+            pnpm config set registry https://registry.npmjs.org/
+        fi
+        npm config set registry https://registry.npmjs.org/
+        
+        print_message "✅ 已切换到npm官方镜像源" $GREEN
+    fi
+}
+
+# 安装依赖（带重试机制）
+install_deps_with_retry() {
+    local max_retries=3
+    local retry_count=0
+    
+    while [ $retry_count -lt $max_retries ]; do
+        print_message "📦 尝试安装依赖 (第 $((retry_count + 1)) 次)..." $BLUE
+        
+        if [ $retry_count -gt 0 ]; then
+            # 重试时清理并切换镜像源
+            print_message "🧹 清理缓存和lock文件..." $YELLOW
+            rm -f package-lock.json pnpm-lock.yaml
+            rm -rf node_modules
+            
+            if [ $retry_count -eq 1 ]; then
+                # 第二次尝试：切换到官方源
+                print_message "🌍 切换到npm官方镜像源..." $YELLOW
+                npm config set registry https://registry.npmjs.org/
+                command -v pnpm &> /dev/null && pnpm config set registry https://registry.npmjs.org/
+            elif [ $retry_count -eq 2 ]; then
+                # 第三次尝试：使用不同的镜像源
+                print_message "🔄 尝试使用腾讯云镜像源..." $YELLOW
+                npm config set registry https://mirrors.cloud.tencent.com/npm/
+                command -v pnpm &> /dev/null && pnpm config set registry https://mirrors.cloud.tencent.com/npm/
+            fi
+        fi
+        
+        # 执行安装
+        if command -v pnpm &> /dev/null; then
+            pnpm install
+        else
+            npm install
+        fi
+        
+        if [ $? -eq 0 ]; then
+            print_message "✅ 依赖安装成功" $GREEN
+            return 0
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                print_message "❌ 安装失败，准备重试..." $RED
+                sleep 2
+            fi
+        fi
+    done
+    
+    print_message "❌ 依赖安装失败，已尝试 $max_retries 次" $RED
+    print_message "💡 手动解决方案：" $CYAN
+    echo "1. 检查网络连接"
+    echo "2. 运行 ./fix-registry.sh 修复镜像源"
+    echo "3. 如需代理：npm config set proxy http://proxy:port"
+    return 1
 }
 
 # 构建项目
@@ -104,9 +170,14 @@ case "$1" in
         fi
         
         print_message "📦 使用 $PACKAGE_MANAGER 构建项目..." $YELLOW
-        $PACKAGE_MANAGER install
+        
+        # 检查并修复镜像源
+        fix_npm_registry
+        
+        # 使用带重试的安装方法
+        install_deps_with_retry
         if [ $? -ne 0 ]; then
-            print_message "❌ 依赖安装失败" $RED
+            print_message "❌ 依赖安装失败，请检查网络或运行 ./fix-registry.sh" $RED
             exit 1
         fi
         
@@ -141,13 +212,45 @@ case "$1" in
         fi
         ;;
         
+    "fix-registry")
+        print_message "🔧 修复npm镜像源问题..." $BLUE
+        
+        print_message "📋 当前配置:" $CYAN
+        echo "npm registry: $(npm config get registry)"
+        if command -v pnpm &> /dev/null; then
+            echo "pnpm registry: $(pnpm config get registry)"
+        fi
+        
+        print_message "🧹 清理缓存和lock文件..." $YELLOW
+        npm cache clean --force
+        command -v pnpm &> /dev/null && pnpm store prune
+        rm -f package-lock.json pnpm-lock.yaml
+        rm -rf node_modules
+        
+        print_message "🌍 设置为官方镜像源..." $YELLOW
+        npm config set registry https://registry.npmjs.org/
+        command -v pnpm &> /dev/null && pnpm config set registry https://registry.npmjs.org/
+        
+        print_message "📦 重新安装依赖..." $YELLOW
+        install_deps_with_retry
+        
+        if [ $? -eq 0 ]; then
+            print_message "✅ 镜像源修复完成！" $GREEN
+        else
+            print_message "❌ 修复失败，请检查网络连接" $RED
+            print_message "💡 如果在企业网络环境，可能需要配置代理:" $CYAN
+            echo "   npm config set proxy http://proxy.company.com:8080"
+            echo "   npm config set https-proxy http://proxy.company.com:8080"
+        fi
+        ;;
+        
     "dev")
         print_message "🚀 启动开发环境..." $BLUE
         check_dependencies
         
         # 检查是否有node_modules
         if [ ! -d "node_modules" ]; then
-            install_deps
+            install_deps_with_retry
         fi
         
         npm run dev
@@ -159,7 +262,7 @@ case "$1" in
         
         # 检查是否有node_modules
         if [ ! -d "node_modules" ]; then
-            install_deps
+            install_deps_with_retry
         fi
         
         # 检查是否有构建文件
@@ -505,6 +608,7 @@ case "$1" in
         echo ""
         print_message "🚀 快速命令:" $PURPLE
         echo "  quick          - 快速启动 (pnpm build + docker 一键启动)"
+        echo "  fix-registry   - 修复npm镜像源问题"
         echo ""
         print_message "🐳 Docker 命令:" $CYAN
         echo "  docker:build   - 构建Docker镜像"
