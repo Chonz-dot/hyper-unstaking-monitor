@@ -9,20 +9,17 @@ RUN apk add --no-cache \
     dumb-init \
     curl
 
-# 复制package文件
-COPY package*.json ./
+# 复制package.json
+COPY package.json ./
 
-# 安装所有依赖（包括开发依赖，用于构建）
-RUN npm ci && npm cache clean --force
+# 安装生产依赖（不使用ci，直接install）
+RUN npm install --only=production && npm cache clean --force
 
-# 复制源代码
-COPY . .
+# 复制构建好的dist目录
+COPY dist/ ./dist/
 
-# 构建TypeScript
-RUN npm run build
-
-# 删除开发依赖，只保留生产依赖
-RUN npm prune --production
+# 创建logs目录（因为.dockerignore排除了logs/）
+RUN mkdir -p logs
 
 # 创建非root用户
 RUN addgroup -g 1001 -S nodejs && \
