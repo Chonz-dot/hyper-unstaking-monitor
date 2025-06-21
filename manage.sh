@@ -59,9 +59,12 @@ check_dependencies() {
 check_and_fix_ports() {
     print_message "🔍 检查端口占用情况..." $BLUE
     
-    # 检查Redis端口6379
-    if lsof -i :6379 > /dev/null 2>&1; then
-        print_message "⚠️  端口6379已被占用" $YELLOW
+    # 从环境变量获取Redis端口，默认6380
+    REDIS_PORT=${REDIS_PORT:-6380}
+    
+    # 检查Redis端口
+    if lsof -i :$REDIS_PORT > /dev/null 2>&1; then
+        print_message "⚠️  端口$REDIS_PORT已被占用" $YELLOW
         
         # 检查是否是我们自己的Redis容器
         EXISTING_REDIS=$(docker ps --filter "name=hype-monitor-redis" --format "{{.Names}}" 2>/dev/null || echo "")
@@ -69,38 +72,45 @@ check_and_fix_ports() {
         if [ -n "$EXISTING_REDIS" ]; then
             print_message "✅ 发现已运行的项目Redis容器，将重用" $GREEN
         else
-            # 检查是否是其他Redis进程
-            REDIS_PROCESS=$(ps aux | grep redis-server | grep -v grep | head -1 || echo "")
+            print_message "🔄 端口$REDIS_PORT被占用，尝试使用其他端口..." $YELLOW
             
-            if [ -n "$REDIS_PROCESS" ]; then
-                print_message "🔄 发现其他Redis进程占用端口6379" $YELLOW
-                print_message "正在尝试停止冲突的Redis服务..." $YELLOW
-                
-                # 尝试停止本地Redis服务
-                if command -v systemctl &> /dev/null; then
-                    sudo systemctl stop redis 2>/dev/null || true
-                    sudo systemctl stop redis-server 2>/dev/null || true
-                elif command -v service &> /dev/null; then
-                    sudo service redis stop 2>/dev/null || true
-                    sudo service redis-server stop 2>/dev/null || true
+            # 尝试寻找可用端口
+            for port in 6380 6381 6382 6383 6384; do
+                if ! lsof -i :$port > /dev/null 2>&1; then
+                    print_message "✅ 找到可用端口: $port" $GREEN
+                    
+                    # 更新环境变量
+                    if [ -f ".env" ]; then
+                        if grep -q "REDIS_PORT=" .env; then
+                            sed -i.bak "s/REDIS_PORT=.*/REDIS_PORT=$port/" .env
+                        else
+                            echo "REDIS_PORT=$port" >> .env
+                        fi
+                        
+                        if grep -q "REDIS_URL=" .env; then
+                            sed -i.bak "s|REDIS_URL=.*|REDIS_URL=redis://localhost:$port|" .env
+                        else
+                            echo "REDIS_URL=redis://localhost:$port" >> .env
+                        fi
+                        
+                        rm -f .env.bak
+                        print_message "📝 已更新.env文件，使用端口$port" $CYAN
+                    fi
+                    
+                    export REDIS_PORT=$port
+                    return 0
                 fi
-                
-                # 再次检查
-                sleep 2
-                if lsof -i :6379 > /dev/null 2>&1; then
-                    print_message "❌ 无法自动解决端口冲突" $RED
-                    print_message "💡 手动解决方案：" $CYAN
-                    echo "1. 查看占用进程: lsof -i :6379"
-                    echo "2. 停止Redis服务: sudo systemctl stop redis"
-                    echo "3. 或杀死进程: sudo kill \$(lsof -t -i:6379)"
-                    return 1
-                else
-                    print_message "✅ 端口冲突已解决" $GREEN
-                fi
-            fi
+            done
+            
+            print_message "❌ 无法找到可用的Redis端口" $RED
+            print_message "💡 手动解决方案：" $CYAN
+            echo "1. 查看占用进程: lsof -i :$REDIS_PORT"
+            echo "2. 停止冲突服务: sudo systemctl stop redis"
+            echo "3. 或在.env中指定其他端口: REDIS_PORT=6381"
+            return 1
         fi
     else
-        print_message "✅ 端口6379可用" $GREEN
+        print_message "✅ 端口$REDIS_PORT可用" $GREEN
     fi
     
     return 0
@@ -264,6 +274,50 @@ case "$1" in
             print_message "❌ Docker 服务启动失败" $RED
             exit 1
         fi
+        ;;
+        
+    "set-port")
+        if [ -z "$2" ]; then
+            print_message "❌ 请指定端口号" $RED
+            print_message "用法: ./manage.sh set-port 6381" $YELLOW
+            exit 1
+        fi
+        
+        NEW_PORT="$2"
+        
+        # 检查端口是否可用
+        if lsof -i :$NEW_PORT > /dev/null 2>&1; then
+            print_message "❌ 端口$NEW_PORT已被占用" $RED
+            print_message "请选择其他端口或停止占用该端口的服务" $YELLOW
+            exit 1
+        fi
+        
+        print_message "🔧 配置Redis使用端口$NEW_PORT..." $BLUE
+        
+        # 确保.env文件存在
+        if [ ! -f ".env" ]; then
+            cp .env.example .env
+            print_message "📝 创建.env文件" $CYAN
+        fi
+        
+        # 更新.env文件
+        if grep -q "REDIS_PORT=" .env; then
+            sed -i.bak "s/REDIS_PORT=.*/REDIS_PORT=$NEW_PORT/" .env
+        else
+            echo "REDIS_PORT=$NEW_PORT" >> .env
+        fi
+        
+        if grep -q "REDIS_URL=" .env; then
+            sed -i.bak "s|REDIS_URL=.*|REDIS_URL=redis://localhost:$NEW_PORT|" .env
+        else
+            echo "REDIS_URL=redis://localhost:$NEW_PORT" >> .env
+        fi
+        
+        rm -f .env.bak
+        
+        print_message "✅ 已配置Redis使用端口$NEW_PORT" $GREEN
+        print_message "📝 配置已保存到.env文件" $CYAN
+        print_message "🚀 现在可以运行 './manage.sh quick' 启动服务" $BLUE
         ;;
         
     "fix-registry")
@@ -580,11 +634,18 @@ case "$1" in
         # 检查端口占用（HYPE监控系统没有HTTP端口，跳过此检查）
         # Docker容器内部通信和Redis端口检查
         if command -v lsof &> /dev/null; then
-            REDIS_PORT="6379"
+            REDIS_PORT=${REDIS_PORT:-6380}
+            if [ -f ".env" ]; then
+                # 从.env文件读取端口配置
+                ENV_PORT=$(grep "REDIS_PORT=" .env 2>/dev/null | cut -d'=' -f2 || echo "$REDIS_PORT")
+                REDIS_PORT=${ENV_PORT:-$REDIS_PORT}
+            fi
+            
             if lsof -i :$REDIS_PORT > /dev/null 2>&1; then
                 print_message "\n✅ Redis端口 $REDIS_PORT 正在使用中" $GREEN
             else
                 print_message "\n⚠️  Redis端口 $REDIS_PORT 未被占用" $YELLOW
+                print_message "💡 如需启动服务，运行: ./manage.sh quick" $CYAN
             fi
         fi
         ;;
@@ -669,6 +730,7 @@ case "$1" in
         print_message "🚀 快速命令:" $PURPLE
         echo "  quick          - 快速启动 (自动检测端口冲突 + pnpm build + docker)"
         echo "  fix-registry   - 修复npm镜像源和端口冲突问题"
+        echo "  set-port PORT  - 设置Redis端口 (例: ./manage.sh set-port 6381)"
         echo ""
         print_message "🐳 Docker 命令:" $CYAN
         echo "  docker:build   - 构建Docker镜像"
