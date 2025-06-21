@@ -31,29 +31,72 @@ hyper-unstaking-monitor/
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+> 💡 **新用户推荐**：查看 [快速启动指南](./quick-start.md) 获取详细的一键启动教程
+
+### 方法一：一键快速启动 (推荐)
+
 ```bash
+# 1. 配置环境变量
+cp .env.example .env
+# 编辑 .env 文件，配置Webhook URL等参数
+
+# 2. 一键启动 (自动完成：安装依赖 → 构建 → Docker打包 → 启动)
+./manage.sh quick
+
+# 3. 查看日志
+./manage.sh logs
+
+# 4. 查看状态
+./manage.sh status
+```
+
+### 方法二：传统启动方式
+
+#### 1. 安装依赖
+```bash
+# 使用 pnpm (推荐)
+pnpm install
+
+# 或使用 npm
 npm install
 ```
 
-### 2. 启动Redis服务
+#### 2. 构建项目
 ```bash
+# 使用 pnpm (推荐)
+pnpm build
+
+# 或使用 npm
+npm run build
+```
+
+#### 3. Docker 启动
+```bash
+# 构建 Docker 镜像
+docker-compose build hype-monitor
+
+# 启动服务
+docker-compose up -d hype-monitor
+
+# 查看日志
+docker-compose logs -f hype-monitor
+```
+
+### 方法三：开发模式
+
+```bash
+# 1. 安装依赖
+npm install
+
+# 2. 启动Redis服务
 npm run docker:up
-```
 
-### 3. 配置环境变量
-```bash
+# 3. 配置环境变量
 cp .env.example .env
-# 编辑 .env 文件，配置Webhook URL等参数
-```
+# 编辑 .env 文件
 
-### 4. 启动监控系统
-```bash
-# 开发模式
+# 4. 启动开发模式
 npm run dev
-
-# 生产模式
-npm run build && npm start
 ```
 
 ## ⚙️ 配置说明
@@ -110,7 +153,38 @@ npm run build && npm start
 
 ## 🛠 开发和维护
 
-### 脚本命令
+### 管理脚本使用
+
+#### 🚀 快速命令
+```bash
+./manage.sh quick          # 一键快速启动 (推荐)
+./manage.sh logs           # 查看实时日志
+./manage.sh status         # 查看服务状态
+./manage.sh stop           # 停止服务
+./manage.sh restart        # 重启服务
+```
+
+#### 🐳 Docker 命令
+```bash
+./manage.sh docker:build   # 构建Docker镜像
+./manage.sh docker:up      # 启动Docker服务
+./manage.sh docker:down    # 停止Docker服务
+./manage.sh docker:restart # 重启Docker服务
+./manage.sh docker:logs    # 查看Docker日志
+./manage.sh docker:status  # 查看Docker状态
+./manage.sh docker:clean   # 清理Docker资源
+```
+
+#### ⚙️ 传统命令
+```bash
+./manage.sh dev            # 启动开发环境
+./manage.sh build          # 构建项目
+./manage.sh install        # 安装依赖
+./manage.sh deploy         # 部署应用
+./manage.sh clean          # 清理构建文件
+```
+
+### npm 脚本命令
 ```bash
 npm run dev          # 开发模式启动
 npm run build        # 构建生产版本

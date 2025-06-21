@@ -89,6 +89,58 @@ get_compose_cmd() {
 }
 
 case "$1" in
+    "quick")
+        print_message "🚀 快速启动生产环境..." $BLUE
+        check_docker || exit 1
+        
+        # 检查是否有pnpm命令
+        if command -v pnpm &> /dev/null; then
+            PACKAGE_MANAGER="pnpm"
+        elif command -v npm &> /dev/null; then
+            PACKAGE_MANAGER="npm"
+        else
+            print_message "❌ 未找到包管理器 (npm/pnpm)" $RED
+            exit 1
+        fi
+        
+        print_message "📦 使用 $PACKAGE_MANAGER 构建项目..." $YELLOW
+        $PACKAGE_MANAGER install
+        if [ $? -ne 0 ]; then
+            print_message "❌ 依赖安装失败" $RED
+            exit 1
+        fi
+        
+        $PACKAGE_MANAGER run build
+        if [ $? -ne 0 ]; then
+            print_message "❌ 项目构建失败" $RED
+            exit 1
+        fi
+        
+        print_message "🐳 构建 Docker 镜像..." $YELLOW
+        COMPOSE_CMD=$(get_compose_cmd)
+        $COMPOSE_CMD build hype-monitor
+        if [ $? -ne 0 ]; then
+            print_message "❌ Docker 镜像构建失败" $RED
+            exit 1
+        fi
+        
+        print_message "🚀 启动 Docker 服务..." $YELLOW
+        $COMPOSE_CMD up -d hype-monitor
+        if [ $? -eq 0 ]; then
+            print_message "✅ 快速启动成功！" $GREEN
+            print_message "📊 使用 './manage.sh logs' 查看日志" $CYAN
+            print_message "📊 使用 './manage.sh status' 查看状态" $CYAN
+            
+            # 等待服务就绪并显示状态
+            print_message "⏳ 等待服务就绪..." $YELLOW
+            sleep 5
+            ./manage.sh status
+        else
+            print_message "❌ Docker 服务启动失败" $RED
+            exit 1
+        fi
+        ;;
+        
     "dev")
         print_message "🚀 启动开发环境..." $BLUE
         check_dependencies
@@ -362,13 +414,14 @@ case "$1" in
             pm2 list | grep $PM2_NAME || print_message "❌ PM2中未找到服务" $RED
         fi
         
-        # 检查端口占用
+        # 检查端口占用（HYPE监控系统没有HTTP端口，跳过此检查）
+        # Docker容器内部通信和Redis端口检查
         if command -v lsof &> /dev/null; then
-            PORT=$(grep -r "PORT" .env 2>/dev/null | cut -d'=' -f2 || echo "3000")
-            if lsof -i :$PORT > /dev/null 2>&1; then
-                print_message "\n✅ 端口 $PORT 正在使用中" $GREEN
+            REDIS_PORT="6379"
+            if lsof -i :$REDIS_PORT > /dev/null 2>&1; then
+                print_message "\n✅ Redis端口 $REDIS_PORT 正在使用中" $GREEN
             else
-                print_message "\n❌ 端口 $PORT 未被占用" $RED
+                print_message "\n⚠️  Redis端口 $REDIS_PORT 未被占用" $YELLOW
             fi
         fi
         ;;
@@ -450,6 +503,9 @@ case "$1" in
         echo ""
         print_message "用法: ./manage.sh {command}" $YELLOW
         echo ""
+        print_message "🚀 快速命令:" $PURPLE
+        echo "  quick          - 快速启动 (pnpm build + docker 一键启动)"
+        echo ""
         print_message "🐳 Docker 命令:" $CYAN
         echo "  docker:build   - 构建Docker镜像"
         echo "  docker:up      - 启动Docker服务"
@@ -476,16 +532,16 @@ case "$1" in
         echo "  build    - 构建项目"
         echo "  test     - 运行测试"
         echo ""
-        print_message "🚀 推荐使用 Docker:" $PURPLE
-        echo "  ./manage.sh docker:prod    # 一键生产部署"
-        echo "  ./manage.sh docker:dev     # 开发环境"
-        echo "  ./manage.sh docker:logs    # 查看日志"
-        echo "  ./manage.sh docker:status  # 查看状态"
+        print_message "🚀 推荐快速启动:" $PURPLE
+        echo "  ./manage.sh quick          # 一键快速启动 (推荐)"
+        echo "  ./manage.sh logs           # 查看日志"
+        echo "  ./manage.sh status         # 查看状态"
+        echo "  ./manage.sh stop           # 停止服务"
         echo ""
         print_message "示例:" $YELLOW
-        echo "  ./manage.sh docker:prod    # Docker生产模式"
-        echo "  ./manage.sh docker:logs    # 查看日志"
-        echo "  ./manage.sh deploy         # 一键部署"
+        echo "  ./manage.sh quick          # 快速启动生产环境"
+        echo "  ./manage.sh logs           # 查看实时日志"
+        echo "  ./manage.sh restart        # 重启服务"
         exit 1
         ;;
 esac
