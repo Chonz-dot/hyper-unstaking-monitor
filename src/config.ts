@@ -32,6 +32,23 @@ const WATCHED_ADDRESSES: WatchedAddress[] = [
   { address: '0xdcb0b5e41d6ed4dd834316d4177d73452014f983', label: '解锁地址24', unlockAmount: 20136.00, isActive: true },
   { address: '0xf4b03f6bf1c7d529194410dc3d0775a1d7bff09b', label: '解锁地址25', unlockAmount: 20036.19, isActive: true },
   { address: '0x7bfee91193d9df2ac0bfe90191d40f23c773c060', label: '解锁地址26', unlockAmount: 20000.00, isActive: true },
+  { address: '0x43e9abea1910387c4292bca4b94de81462f8a251', label: 'HyperLabs团队地址', unlockAmount: 240000000, isActive: true }, // 2.4亿HYPE，预计2025/11/28开始解锁
+  { address: '0xd57ecca444a9acb7208d286be439de12dd09de5d', label: 'Hyper Foundation基金会', unlockAmount: 60000000, isActive: true }, // 6000万HYPE
+  { address: '0xfefefefefefefefefefefefefefefefefefefefe', label: 'Assistance Fund援助基金', unlockAmount: 26000000, isActive: true }, // 2600万HYPE，未质押
+  { address: '0x4e14fc11f58b64740e66e4b1aa188a4b007c0eab', label: '最大个人活跃地址', unlockAmount: 1490000, isActive: true }, // 149万HYPE，未质押，流动性最强
+  { address: '0x9794bbbc222b6b93c1417d01aa1ff06d42e5333b', label: 'smartestmoney传奇交易员', unlockAmount: 3000000, isActive: true }, // 300万HYPE已质押+50万EVM
+  { address: '0xfae95f601f3a25ace60d19dbb929f2a5c57e3571', label: 'laurentzeimes第二大个人', unlockAmount: 3300000, isActive: true }, // 330万HYPE已质押
+  { address: '0x51156f7002c4f74f4956c9e0f2b7bfb6e9dbfac2', label: 'ellie_nfts地址1', unlockAmount: 800000, isActive: true }, // 集群共240万
+  { address: '0xba60e7e6c222a6eca70abb6bb011c40fdaaa565b', label: 'ellie_nfts地址2', unlockAmount: 800000, isActive: true },
+  { address: '0x9a4a2224eb1ce642a497738e6e1227a0411f3679', label: 'ellie_nfts地址3', unlockAmount: 800000, isActive: true },
+  { address: '0xfdc5a81605d8b926947d2e865f74025dd53ac314', label: '神秘巨鲸集群1', unlockAmount: 200000, isActive: true }, // 集群共230万HYPE
+  { address: '0x5d83bb3313240cab65e2e9200d3aaf3520474fb6', label: '神秘巨鲸集群2', unlockAmount: 200000, isActive: true },
+  { address: '0x316fc62528c317e569fe5aa4df6c1af0c4f2e678', label: '神秘巨鲸集群3', unlockAmount: 200000, isActive: true },
+  { address: '0x5b5d51203a0f9079f8aeb098a6523a13f298c060', label: 'Abraxas Capital机构1', unlockAmount: 1145000, isActive: true }, // 共229万
+  { address: '0xb83de012dba672c76a7dbbbf3e459cb59d7d6e36', label: 'Abraxas Capital机构2', unlockAmount: 1145000, isActive: true },
+  { address: '0xcaC19662Ec88d23Fa1c81aC0e8570B0cf2FF26b3', label: 'Galaxy Digital机构1', unlockAmount: 900000, isActive: true }, // 共180万
+  { address: '0x62bc1fe6009388219dd84f9dca37930f6fb6fa22', label: 'Galaxy Digital机构2', unlockAmount: 900000, isActive: true },
+  { address: '0xcfdb74a8c080bb7b4360ed6fe21f895c653efff4', label: 'Amber Group机构', unlockAmount: 1500000, isActive: true }, // 150万HYPE
 ];
 
 export const config: Config = {
