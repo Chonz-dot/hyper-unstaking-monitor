@@ -1,9 +1,29 @@
-HYPE代币转入/转出操作
+# HYPE解锁与合约监控系统
+
+实时监控Hyperliquid上的HYPE代币解锁转账和合约交易信号，通过Webhook提供毫秒级预警。
+
+## ✨ 主要功能
+
+### 🔄 转账监控
+- **实时监控**: 26个指定钱包地址的HYPE代币转入/转出操作
 - **智能预警**: 单笔≥10,000 HYPE 和 24小时累计≥50,000 HYPE
 - **去重处理**: 24小时窗口内避免重复警报
-- **Webhook通知**: 支持重试机制的实时通知
+
+### 📊 合约交易监控 (NEW!)
+- **交易员跟踪**: 监控指定交易员的合约开仓/平仓信号
+- **多空识别**: 自动识别开多、开空、平仓操作
+- **价值筛选**: 支持最小名义价值阈值过滤
+- **资产过滤**: 可配置监控特定资产（BTC、ETH等）
+
+### 🔔 通知系统
+- **双Webhook支持**: 转账监控和合约监控使用独立Webhook
+- **重试机制**: 支持重试的实时通知
+- **详细格式化**: 结构化的警报消息格式
+
+### 🛠 技术特性
 - **Redis缓存**: 高效的数据缓存和统计
 - **容错设计**: 自动重连和错误恢复
+- **并行监控**: 转账与合约监控同时工作
 
 ## 📁 项目结构
 
@@ -13,15 +33,18 @@ hyper-unstaking-monitor/
 │   ├── engine/
 │   │   └── alert-engine.ts      # 预警引擎
 │   ├── services/
-│   │   └── hyperliquid-monitor.ts # Hyperliquid WebSocket监控
+│   │   ├── hyperliquid-monitor.ts # Hyperliquid WebSocket监控
+│   │   └── contractMonitor.ts   # 合约交易监控 (NEW!)
 │   ├── utils/
 │   │   └── helpers.ts           # 工具函数
 │   ├── cache.ts                 # Redis缓存管理
 │   ├── config.ts                # 配置管理
 │   ├── logger.ts                # 日志系统
 │   ├── types.ts                 # TypeScript类型定义
-│   ├── webhook.ts               # Webhook通知
+│   ├── webhook.ts               # Webhook通知 (支持双Webhook)
 │   └── index.ts                 # 主程序入口
+├── tests/                       # 测试文件
+│   └── contractMonitor.test.ts  # 合约监控测试
 ├── logs/                        # 日志文件目录
 ├── docker-compose.yml           # Redis容器配置
 ├── package.json
@@ -106,24 +129,52 @@ npm run dev
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| `WEBHOOK_URL` | Rocket Webhook通知地址 | - |
+| `WEBHOOK_URL` | 转账监控Webhook通知地址 | - |
+| `CONTRACT_WEBHOOK_URL` | 合约监控Webhook通知地址 | - |
 | `REDIS_URL` | Redis连接地址 | `redis://localhost:6379` |
 | `SINGLE_TRANSFER_THRESHOLD` | 单笔转账预警阈值 | `10000` |
 | `DAILY_CUMULATIVE_THRESHOLD` | 24小时累计预警阈值 | `50000` |
+| `CONTRACT_MONITORING_ENABLED` | 是否启用合约监控 | `false` |
+| `CONTRACT_MIN_NOTIONAL` | 合约监控最小名义价值 | `1000` |
+| `CONTRACT_ASSETS` | 监控的资产列表(逗号分隔) | 全部资产 |
 | `LOG_LEVEL` | 日志级别 | `info` |
 
 ### 监控地址
 
+#### 转账监控
 系统监控26个预设地址，包括：
 - 主要解锁地址 (2,381,375.14 HYPE)
 - 25个其他解锁地址
 - 支持自定义预警阈值
 
+#### 合约监控 (NEW!)
+监控4个指定交易员地址：
+- 0xfa6af5f4f7440ce389a1e650991eea45c161e13e
+- 0xa04a4b7b7c37dbd271fdc57618e9cb9836b250bf  
+- 0xb8b9e3097c8b1dddf9c5ea9d48a7ebeaf09d67d2
+- 0xd5ff5491f6f3c80438e02c281726757baf4d1070
+
 ## 📊 预警规则
 
-### 1. 单笔转账预警
+### 1. 转账预警
+#### 单笔转账预警
 - **条件**: 单笔转入/转出 ≥ 10,000 HYPE
-- **通知**: 立即发送Webhook
+- **通知**: 立即发送到转账Webhook
+
+#### 24小时累计预警
+- **条件**: 24小时累计转入/转出 ≥ 50,000 HYPE  
+- **通知**: 立即发送到转账Webhook
+
+### 2. 合约交易预警 (NEW!)
+#### 开仓信号
+- **条件**: 监控地址开多仓/开空仓
+- **过滤**: 名义价值 ≥ $1,000
+- **通知**: 立即发送到合约Webhook
+
+#### 平仓信号
+- **条件**: 监控地址平仓操作
+- **过滤**: 名义价值 ≥ $1,000  
+- **通知**: 立即发送到合约Webhook
 
 ### 2. 累计转账预警
 - **条件**: 24小时累计转入/转出 ≥ 50,000 HYPE

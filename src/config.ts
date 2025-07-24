@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { Config, WatchedAddress } from './types';
+import { Config, WatchedAddress, ContractTrader } from './types';
 
 // 加载环境变量
 dotenv.config();
@@ -51,6 +51,14 @@ const WATCHED_ADDRESSES: WatchedAddress[] = [
   { address: '0xcfdb74a8c080bb7b4360ed6fe21f895c653efff4', label: 'Amber Group机构', unlockAmount: 1500000, isActive: true }, // 150万HYPE
 ];
 
+// 合约交易员监控列表
+const CONTRACT_TRADERS: ContractTrader[] = [
+  { address: '0xfa6af5f4f7440ce389a1e650991eea45c161e13e', label: '交易员1', description: 'hyperdash交易员', isActive: true },
+  { address: '0xa04a4b7b7c37dbd271fdc57618e9cb9836b250bf', label: '交易员2', description: 'hyperdash交易员', isActive: true },
+  { address: '0xb8b9e3097c8b1dddf9c5ea9d48a7ebeaf09d67d2', label: '交易员3', description: 'hyperdash交易员', isActive: true },
+  { address: '0xd5ff5491f6f3c80438e02c281726757baf4d1070', label: '交易员4', description: 'hyperdash交易员', isActive: true },
+];
+
 export const config: Config = {
   hyperliquid: {
     wsUrl: process.env.HYPERLIQUID_WS_URL || 'wss://api.hyperliquid.xyz/ws',
@@ -61,7 +69,8 @@ export const config: Config = {
     keyPrefix: process.env.REDIS_KEY_PREFIX || 'hype_monitor:',
   },
   webhook: {
-    url: process.env.WEBHOOK_URL || '',
+    transferUrl: process.env.WEBHOOK_URL || '',
+    contractUrl: process.env.CONTRACT_WEBHOOK_URL,
     timeout: parseInt(process.env.WEBHOOK_TIMEOUT || '5000'),
     retries: parseInt(process.env.WEBHOOK_RETRIES || '3'),
   },
@@ -69,6 +78,12 @@ export const config: Config = {
     singleThreshold: parseFloat(process.env.SINGLE_TRANSFER_THRESHOLD || '10000'),
     cumulative24hThreshold: parseFloat(process.env.CUMULATIVE_24H_THRESHOLD || '50000'),
     addresses: WATCHED_ADDRESSES,
+  },
+  contractMonitoring: {
+    enabled: process.env.CONTRACT_MONITORING_ENABLED === 'true',
+    traders: CONTRACT_TRADERS,
+    minNotionalValue: parseFloat(process.env.CONTRACT_MIN_NOTIONAL || '1000'), // 最小1000美元名义价值
+    assets: process.env.CONTRACT_ASSETS ? process.env.CONTRACT_ASSETS.split(',') : undefined,
   },
   logging: {
     level: process.env.LOG_LEVEL || 'info',

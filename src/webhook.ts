@@ -1,46 +1,75 @@
 import axios from 'axios';
 import config from './config';
 import logger from './logger';
-import { WebhookAlert } from './types';
+import { WebhookAlert, ContractWebhookAlert } from './types';
 
 export class WebhookNotifier {
-  private webhookUrl: string;
+  private transferWebhookUrl: string;
+  private contractWebhookUrl: string | undefined;
   private timeout: number;
   private maxRetries: number;
 
   constructor() {
-    this.webhookUrl = config.webhook.url;
+    this.transferWebhookUrl = config.webhook.transferUrl;
+    this.contractWebhookUrl = config.webhook.contractUrl;
     this.timeout = config.webhook.timeout;
     this.maxRetries = config.webhook.retries;
 
-    if (!this.webhookUrl) {
-      logger.warn('Webhook URL未配置，警报通知将被禁用');
+    if (!this.transferWebhookUrl) {
+      logger.warn('转账监控Webhook URL未配置，转账警报通知将被禁用');
+    }
+
+    if (!this.contractWebhookUrl) {
+      logger.warn('合约监控Webhook URL未配置，合约警报通知将被禁用');
     }
   }
 
   async sendAlert(alert: WebhookAlert): Promise<void> {
-    if (!this.webhookUrl) {
-      logger.warn('Webhook URL未配置，跳过警报发送');
+    if (!this.transferWebhookUrl) {
+      logger.warn('转账Webhook URL未配置，跳过转账警报发送');
       return;
     }
+
+    await this.sendWebhook(this.transferWebhookUrl, alert, 'transfer');
+  }
+
+  async sendContractAlert(alert: ContractWebhookAlert): Promise<void> {
+    if (!this.contractWebhookUrl) {
+      logger.warn('合约Webhook URL未配置，跳过合约警报发送');
+      return;
+    }
+
+    await this.sendWebhook(this.contractWebhookUrl, alert, 'contract');
+  }
+
+  private async sendWebhook(webhookUrl: string, alert: WebhookAlert | ContractWebhookAlert, type: 'transfer' | 'contract'): Promise<void> {
 
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
-        await this.makeRequest(alert);
-        logger.info(`警报发送成功: ${alert.alertType} for ${alert.addressLabel}`, {
+        if (type === 'transfer') {
+          await this.makeTransferRequest(webhookUrl, alert as WebhookAlert);
+        } else {
+          await this.makeContractRequest(webhookUrl, alert as ContractWebhookAlert);
+        }
+
+        const alertType = 'alertType' in alert ? alert.alertType : 'unknown';
+        const label = 'addressLabel' in alert ? alert.addressLabel : ('traderLabel' in alert ? alert.traderLabel : 'unknown');
+
+        logger.info(`${type}警报发送成功: ${alertType} for ${label}`, {
           attempt,
-          amount: alert.amount,
-          txHash: alert.txHash.substring(0, 10) + '...',
+          address: alert.address
         });
         return;
 
       } catch (error) {
         lastError = error as Error;
-        logger.warn(`警报发送失败 (尝试 ${attempt}/${this.maxRetries}):`, {
+        const alertType = 'alertType' in alert ? alert.alertType : 'unknown';
+
+        logger.warn(`${type}警报发送失败 (尝试 ${attempt}/${this.maxRetries}):`, {
           error: lastError.message,
-          alertType: alert.alertType,
+          alertType,
           address: alert.address,
         });
 
@@ -53,14 +82,15 @@ export class WebhookNotifier {
     }
 
     // 所有重试都失败了
-    logger.error(`警报发送完全失败: ${alert.alertType}`, {
+    const alertType = 'alertType' in alert ? alert.alertType : 'unknown';
+    logger.error(`${type}警报发送完全失败: ${alertType}`, {
       address: alert.address,
       attempts: this.maxRetries,
       finalError: lastError?.message,
     });
   }
 
-  private async makeRequest(alert: WebhookAlert): Promise<void> {
+  private async makeTransferRequest(webhookUrl: string, alert: WebhookAlert): Promise<void> {
     // 格式化金额显示
     const formatAmount = (amount: string) => {
       const num = parseFloat(amount);
@@ -139,7 +169,7 @@ export class WebhookNotifier {
       }
     };
 
-    const response = await axios.post(this.webhookUrl, simplePayload, {
+    const response = await axios.post(webhookUrl, simplePayload, {
       timeout: this.timeout,
       headers: {
         'Content-Type': 'application/json',
@@ -151,6 +181,148 @@ export class WebhookNotifier {
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
+  }
+
+  private async makeContractRequest(webhookUrl: string, alert: ContractWebhookAlert): Promise<void> {
+    // 格式化金额显示
+    const formatAmount = (amount: string) => {
+      const num = parseFloat(amount);
+      return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+    };
+
+    // 确定警报级别和类型 - 更新图标系统
+    let alertLevel = 'INFO';
+    let actionEmoji = '📊'; // 默认图标
+
+    // 根据动作类型选择专属图标
+    const getActionInfo = (alertType: string, side: string) => {
+      switch (alertType) {
+        case 'position_open_long':
+          return {
+            text: 'Long Position Opened',
+            emoji: '🟢', // 绿色圆圈表示开多
+            color: 0x00FF00
+          };
+        case 'position_open_short':
+          return {
+            text: 'Short Position Opened',
+            emoji: '🔴', // 红色圆圈表示开空
+            color: 0xFF0000
+          };
+        case 'position_close':
+          return {
+            text: 'Position Closed',
+            emoji: '⭕', // 圆形表示平仓/关闭
+            color: 0xFFFF00
+          };
+        case 'position_increase':
+          return {
+            text: side === 'long' ? 'Long Position Increased' : 'Short Position Increased',
+            emoji: '➕', // 加号表示加仓
+            color: 0x0099FF
+          };
+        case 'position_decrease':
+          return {
+            text: side === 'long' ? 'Long Position Decreased' : 'Short Position Decreased',
+            emoji: '➖', // 减号表示减仓
+            color: 0xFF9900
+          };
+        default:
+          return {
+            text: 'Position Updated',
+            emoji: '📊',
+            color: 0x808080
+          };
+      }
+    };
+
+    const actionInfo = getActionInfo(alert.alertType, alert.side);
+
+    // 根据名义价值调整警报级别
+    const notionalValue = parseFloat(alert.notionalValue || '0');
+    if (notionalValue >= 100000) {
+      alertLevel = 'HIGH';
+    } else if (notionalValue >= 10000) {
+      alertLevel = 'MEDIUM';
+    }
+
+    // 操作类型转换
+    const getActionText = (alertType: string) => {
+      switch (alertType) {
+        case 'position_open_long': return 'Long Position Opened';
+        case 'position_open_short': return 'Short Position Opened';
+        case 'position_close': return 'Position Closed';
+        case 'position_increase': return 'Position Increased';
+        case 'position_decrease': return 'Position Decreased';
+        default: return 'Position Updated';
+      }
+    };
+
+    const actionText = getActionText(alert.alertType);
+    const sideEmoji = alert.side === 'long' ? '📈' : '📉';
+
+    // 简化交易员显示：合并标签和地址
+    const traderDisplay = `${alert.traderLabel || 'Unknown'} (${alert.address})`;
+
+    // 创建简洁的纯文本消息
+    const messageText = [
+      `${actionInfo.emoji} **Contract Signal**: ${actionInfo.text}`,
+      ``,
+      `**Trader**: ${traderDisplay}`,
+      `**Asset**: ${alert.asset} ${sideEmoji}`,
+      `**Size**: ${formatAmount(alert.size)}`,
+      `**Price**: $${alert.price ? formatAmount(alert.price) : 'N/A'}`,
+      `**Notional**: $${alert.notionalValue ? formatAmount(alert.notionalValue) : 'N/A'}`,
+      `${alert.leverage ? `**Leverage**: ${alert.leverage}x` : ''}`,
+      `**Time**: ${new Date(alert.blockTime).toISOString().replace('T', ' ').slice(0, 19)} UTC`,
+      `**Tx**: [View Details](${this.createHyperliquidExplorerUrl(alert.txHash, alert.address)})`,
+    ].filter(line => line !== '').join('\n');
+
+    // 使用简单的文本格式
+    const contractPayload = {
+      text: messageText,
+      username: 'Contract Monitor',
+      alert_info: {
+        alert_level: alertLevel,
+        trader_label: alert.traderLabel || 'Unknown',
+        action: actionText,
+        asset: alert.asset,
+        side: alert.side,
+        size: formatAmount(alert.size),
+        price: alert.price ? formatAmount(alert.price) : null,
+        notional_value: alert.notionalValue ? formatAmount(alert.notionalValue) : null,
+        leverage: alert.leverage,
+        address: alert.address,
+        transaction_hash: alert.txHash
+      },
+      raw_alert: alert,
+      metadata: {
+        system: 'hype-contract-monitor',
+        version: '1.1.0',
+        timestamp_iso: new Date(alert.timestamp).toISOString(),
+        action_type: actionText,
+        alert_level: alertLevel
+      }
+    };
+
+    const response = await axios.post(webhookUrl, contractPayload, {
+      timeout: this.timeout,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'HYPE-Contract-Monitor/1.1',
+      },
+    });
+
+    // 检查响应状态
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+  }
+
+  private createHyperliquidExplorerUrl(txHash: string, address: string): string {
+    // Hyperliquid 的 explorer 链接格式
+    // 由于 txHash 可能不是标准的区块链交易哈希，我们使用用户页面链接
+    return `https://app.hyperliquid.xyz/trade/${address}`;
   }
 
   private getRetryDelay(attempt: number): number {
