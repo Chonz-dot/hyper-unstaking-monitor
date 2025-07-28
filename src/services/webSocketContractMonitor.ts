@@ -24,6 +24,12 @@ export class WebSocketContractMonitor extends EventEmitter {
   private maxConsecutiveErrors: number;
   private reconnectAttempts = new Map<string, number>(); // 记录每个交易员的重连尝试次数
   private maxReconnectAttempts: number;
+  private connectionHealth = new Map<string, {
+    lastPingTime: number;
+    consecutiveFailures: number;
+    totalReconnects: number;
+    lastSuccessfulMessage: number;
+  }>(); // 连接健康状态跟踪
 
   constructor(traders: ContractTrader[], minNotionalValue = 10) {
     super();
@@ -127,33 +133,75 @@ export class WebSocketContractMonitor extends EventEmitter {
       url: config.hyperliquid.wsUrl,
       timeout: config.hyperliquid.connectionTimeout,
       keepAlive: { 
-        interval: config.hyperliquid.keepAliveInterval,
-        timeout: config.hyperliquid.keepAliveTimeout
+        interval: 25000,  // 25秒心跳间隔，更保守
+        timeout: 15000    // 15秒心跳超时
       },
       reconnect: {
-        maxRetries: config.hyperliquid.reconnectAttempts,
+        maxRetries: 20,   // 增加重试次数
         connectionTimeout: config.hyperliquid.connectionTimeout,
-        connectionDelay: (attempt: number) => Math.min(5000 * attempt, 25000), // 指数退避
-        shouldReconnect: () => this.consecutiveErrors < this.maxConsecutiveErrors,
+        connectionDelay: (attempt: number) => {
+          // 更渐进的退避策略：2s, 4s, 8s, 16s, 30s(最大)
+          return Math.min(2000 * Math.pow(2, attempt - 1), 30000);
+        },
+        shouldReconnect: (error: any) => {
+          // 更智能的重连判断
+          if (this.consecutiveErrors > this.maxConsecutiveErrors) {
+            logger.error(`${trader.label} 连续错误过多，停止重连`, { consecutiveErrors: this.consecutiveErrors });
+            return false;
+          }
+          
+          // 检查特定错误类型，某些错误不应重连
+          const errorMessage = error?.message?.toLowerCase() || '';
+          if (errorMessage.includes('unauthorized') || errorMessage.includes('forbidden')) {
+            logger.error(`${trader.label} 认证错误，停止重连`, { error: errorMessage });
+            return false;
+          }
+          
+          logger.debug(`${trader.label} 将尝试重连`, { error: errorMessage, consecutiveErrors: this.consecutiveErrors });
+          return true;
+        }
       },
+      autoResubscribe: true, // 启用自动重订阅！
     });
 
     // 创建独立的客户端
     const client = new hl.SubscriptionClient({ transport });
     
-    // 保存到映射中
+    // 保存到映射中并初始化健康状态
     this.traderClients.set(trader.address, { transport, client });
+    this.connectionHealth.set(trader.address, {
+      lastPingTime: Date.now(),
+      consecutiveFailures: 0,
+      totalReconnects: 0,
+      lastSuccessfulMessage: Date.now()
+    });
     
-    // 监听连接状态变化
+    // 监听连接状态变化和错误
     transport.ready()
       .then(() => {
-        // 连接成功时重置错误计数
+        // 连接成功时重置健康状态
+        const health = this.connectionHealth.get(trader.address);
+        if (health) {
+          health.consecutiveFailures = 0;
+          health.lastPingTime = Date.now();
+          this.connectionHealth.set(trader.address, health);
+        }
+        
+        // 重置重连计数
         const currentAttempts = this.reconnectAttempts.get(trader.address) || 0;
         if (currentAttempts > 0) {
           this.reconnectAttempts.set(trader.address, 0);
+          logger.info(`✅ ${trader.label} 连接恢复，重置重连计数`);
         }
       })
       .catch((error) => {
+        // 连接失败时更新健康状态
+        const health = this.connectionHealth.get(trader.address);
+        if (health) {
+          health.consecutiveFailures++;
+          this.connectionHealth.set(trader.address, health);
+        }
+        
         logger.error(`❌ ${trader.label} 连接监听错误:`, error);
         this.consecutiveErrors++;
       });
@@ -274,6 +322,14 @@ export class WebSocketContractMonitor extends EventEmitter {
 
   private handleUserEvent(data: any, trader: ContractTrader): void {
     try {
+      // 更新连接健康状态 - 收到消息说明连接活跃
+      const health = this.connectionHealth.get(trader.address);
+      if (health) {
+        health.lastSuccessfulMessage = Date.now();
+        health.consecutiveFailures = 0; // 重置失败计数
+        this.connectionHealth.set(trader.address, health);
+      }
+      
       logger.debug(`📨 收到${trader.label}事件`, {
         eventKeys: Object.keys(data || {}),
         timestamp: new Date().toISOString()
@@ -302,6 +358,13 @@ export class WebSocketContractMonitor extends EventEmitter {
     } catch (error) {
       logger.error(`处理${trader.label}事件失败:`, error);
       this.consecutiveErrors++;
+      
+      // 更新连接健康状态
+      const health = this.connectionHealth.get(trader.address);
+      if (health) {
+        health.consecutiveFailures++;
+        this.connectionHealth.set(trader.address, health);
+      }
     }
   }
 
@@ -505,17 +568,80 @@ export class WebSocketContractMonitor extends EventEmitter {
         return;
       }
       
+      // 计算连接健康统计
+      const healthStats = this.getConnectionHealthStats();
+      
       logger.info('📊 合约监控状态报告', {
         uptime: Math.floor((Date.now() - this.startTime) / 1000) + 's',
         connections: this.traderClients.size,
         traders: this.traders.length,
         consecutiveErrors: this.consecutiveErrors,
-        disconnectedTraders: this.getDisconnectedTraders().length
+        disconnectedTraders: this.getDisconnectedTraders().length,
+        healthyConnections: healthStats.healthy,
+        unhealthyConnections: healthStats.unhealthy,
+        avgReconnects: healthStats.avgReconnects
       });
       
       // 检查并重连断开的交易员
       this.attemptReconnectDisconnected();
+      
+      // 定期健康检查
+      this.performHealthCheck();
     }, 30000);
+  }
+
+  private getConnectionHealthStats() {
+    let healthy = 0;
+    let unhealthy = 0;
+    let totalReconnects = 0;
+    
+    for (const [address, health] of this.connectionHealth) {
+      const isHealthy = health.consecutiveFailures <= 3 && 
+                       (Date.now() - health.lastSuccessfulMessage) < 120000; // 2分钟内有消息
+      
+      if (isHealthy) {
+        healthy++;
+      } else {
+        unhealthy++;
+      }
+      
+      totalReconnects += health.totalReconnects;
+    }
+    
+    return {
+      healthy,
+      unhealthy,
+      avgReconnects: this.connectionHealth.size > 0 ? totalReconnects / this.connectionHealth.size : 0
+    };
+  }
+
+  private performHealthCheck(): void {
+    const now = Date.now();
+    const staleThreshold = 180000; // 3分钟没有消息认为连接可能有问题
+    
+    for (const [address, health] of this.connectionHealth) {
+      const trader = this.traders.find(t => t.address === address);
+      if (!trader) continue;
+      
+      const isStale = (now - health.lastSuccessfulMessage) > staleThreshold;
+      const hasHighFailures = health.consecutiveFailures > 5;
+      
+      if (isStale || hasHighFailures) {
+        logger.warn(`🔍 ${trader.label} 连接健康检查异常`, {
+          isStale,
+          hasHighFailures,
+          lastMessage: new Date(health.lastSuccessfulMessage).toISOString(),
+          consecutiveFailures: health.consecutiveFailures,
+          staleDuration: Math.floor((now - health.lastSuccessfulMessage) / 1000) + 's'
+        });
+        
+        // 标记为需要重连
+        if (this.traderClients.has(address)) {
+          logger.info(`🔄 ${trader.label} 健康检查失败，触发重连`);
+          this.traderClients.delete(address);
+        }
+      }
+    }
   }
 
   private getDisconnectedTraders(): ContractTrader[] {
