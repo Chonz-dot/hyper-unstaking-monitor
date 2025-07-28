@@ -1,6 +1,6 @@
 import HyperliquidMonitor from './services/hyperliquid-monitor';
 import BatchedHyperliquidMonitor from './services/hyperliquid-monitor';
-import { ContractMonitor } from './services/contractMonitor';
+import { WebSocketContractMonitor } from './services/webSocketContractMonitor';
 import AlertEngine from './engine/alert-engine';
 import CacheManager from './cache';
 import WebhookNotifier from './webhook';
@@ -13,7 +13,7 @@ export const SYSTEM_START_TIME = Date.now();
 
 class HypeUnstakingMonitor {
   private hyperliquidMonitor: BatchedHyperliquidMonitor;
-  private contractMonitor?: ContractMonitor;
+  private contractMonitor?: WebSocketContractMonitor;
   private alertEngine: AlertEngine;
   private cache: CacheManager;
   private notifier: WebhookNotifier;
@@ -28,15 +28,30 @@ class HypeUnstakingMonitor {
     this.hyperliquidMonitor = new BatchedHyperliquidMonitor(this.handleEvent.bind(this));
 
     // 如果启用了合约监控，初始化合约监控器
+    logger.info('🔧 检查合约监控配置', {
+      enabled: config.contractMonitoring.enabled,
+      tradersCount: config.contractMonitoring.traders.length,
+      envEnabled: process.env.CONTRACT_MONITORING_ENABLED,
+      envContractEnabled: process.env.CONTRACT_MONITORING_ENABLED === 'true',
+      tradersList: config.contractMonitoring.traders.map(t => ({ label: t.label, isActive: t.isActive }))
+    });
+
     if (config.contractMonitoring.enabled) {
-      this.contractMonitor = new ContractMonitor(
+      logger.info('✅ 合约监控已启用，使用WebSocket监控器...');
+      this.contractMonitor = new WebSocketContractMonitor(
         config.contractMonitoring.traders,
-        config.contractMonitoring.minNotionalValue,
-        config.contractMonitoring.assets
+        config.contractMonitoring.minNotionalValue
       );
 
       // 监听合约事件
       this.contractMonitor.on('contractEvent', this.handleContractEvent.bind(this));
+      logger.info('🎯 WebSocket合约监控器初始化完成');
+    } else {
+      logger.warn('❌ 合约监控未启用，请检查 CONTRACT_MONITORING_ENABLED 环境变量');
+      logger.warn('当前环境变量值:', {
+        CONTRACT_MONITORING_ENABLED: process.env.CONTRACT_MONITORING_ENABLED,
+        configValue: config.contractMonitoring.enabled
+      });
     }
 
     logger.info('HYPE解锁监控系统初始化完成', {
@@ -69,9 +84,23 @@ class HypeUnstakingMonitor {
       this.hyperliquidMonitor.start();
 
       // 启动合约监控（如果启用）
+      logger.info('检查合约监控器状态...', {
+        contractMonitorExists: !!this.contractMonitor,
+        configEnabled: config.contractMonitoring.enabled,
+        envVar: process.env.CONTRACT_MONITORING_ENABLED
+      });
+
       if (this.contractMonitor) {
-        this.contractMonitor.start(config.hyperliquid.wsUrl);
-        logger.info('合约监控已启动', this.contractMonitor.getStats());
+        try {
+          logger.info('开始启动WebSocket合约监控器...');
+          await this.contractMonitor.start();
+          logger.info('✅ WebSocket合约监控启动完成', this.contractMonitor.getStats());
+        } catch (error) {
+          logger.error('WebSocket合约监控启动失败:', error);
+          // 不抛出错误，继续运行其他功能
+        }
+      } else {
+        logger.warn('合约监控器未初始化，跳过启动');
       }
 
       this.isRunning = true;
@@ -86,6 +115,7 @@ class HypeUnstakingMonitor {
         batchInfo: this.hyperliquidMonitor.getStatus(),
         contractMonitoring: {
           enabled: config.contractMonitoring.enabled,
+          type: 'WebSocket-userEvents',
           traders: this.contractMonitor?.getStats()
         }
       });
@@ -201,6 +231,7 @@ class HypeUnstakingMonitor {
     startTime: number;
     uptime: number;
     hyperliquidStatus: any;
+    contractStats: any;
     stats: any;
   }> {
     const now = Date.now();
@@ -211,6 +242,7 @@ class HypeUnstakingMonitor {
       startTime: this.startTime,
       uptime,
       hyperliquidStatus: this.hyperliquidMonitor.getStatus(),
+      contractStats: this.contractMonitor?.getStats() || null,
       stats: await this.alertEngine.getStats(),
     };
   }

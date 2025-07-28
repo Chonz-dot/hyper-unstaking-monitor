@@ -179,7 +179,7 @@ export class HyperliquidDataParser {
         eventType: 'trade_buy',
         amount: amount.toString(),
         hash: fill.hash || `fill_${fill.tid}`,
-        blockTime: fill.time,
+        blockTime: this.normalizeTimestamp(fill.time),
         asset: 'HYPE',
         metadata: {
           price: price.toString(),
@@ -248,7 +248,7 @@ export class HyperliquidDataParser {
       eventType,
       amount: amount.toString(),
       hash,
-      blockTime: time,
+      blockTime: this.normalizeTimestamp(time),
       asset: 'HYPE',
       metadata: {
         usdValue: delta.usdcValue || '0',
@@ -271,7 +271,7 @@ export class HyperliquidDataParser {
       eventType: 'deposit',
       amount: amount.toString(),
       hash,
-      blockTime: time,
+      blockTime: this.normalizeTimestamp(time),
       asset: 'HYPE',
       metadata: {
         usdValue: delta.usdcValue || '0',
@@ -292,7 +292,7 @@ export class HyperliquidDataParser {
       eventType: 'withdraw',
       amount: amount.toString(),
       hash,
-      blockTime: time,
+      blockTime: this.normalizeTimestamp(time),
       asset: 'HYPE',
       metadata: {
         usdValue: delta.usdcValue || '0',
@@ -344,6 +344,26 @@ export class HyperliquidDataParser {
     const amount = parseFloat(event.amount).toLocaleString();
     const type = event.eventType.replace('_', ' ');
     return `${type}: ${amount} ${event.asset}`;
+  }
+
+  // 标准化时间戳 - 统一转换为毫秒级时间戳
+  private static normalizeTimestamp(timestamp: number): number {
+    if (!timestamp) {
+      return Date.now();
+    }
+    
+    // 如果是微秒级时间戳（大于10^15），转换为毫秒
+    if (timestamp > 1e15) {
+      return Math.floor(timestamp / 1000);
+    }
+    
+    // 如果是秒级时间戳（小于10^12），转换为毫秒
+    if (timestamp < 1e12) {
+      return timestamp * 1000;
+    }
+    
+    // 否则认为已经是毫秒级时间戳
+    return timestamp;
   }
 }
 

@@ -34,11 +34,10 @@
   "author": "Edison",
   "license": "MIT",
   "dependencies": {
-    "@nktkas/hyperliquid": "^0.22.2",
+    "@nktkas/hyperliquid": "0.21.1",
     "@types/ws": "^8.18.1",
     "axios": "^1.6.5",
     "dotenv": "^16.3.1",
-    "hyperliquid": "^1.4.0",
     "redis": "^4.6.12",
     "winston": "^3.11.0",
     "ws": "^8.18.2"

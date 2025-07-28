@@ -33,16 +33,22 @@ class BatchMonitor {
     // 为每个批次创建独立的WebSocket连接
     this.transport = new hl.WebSocketTransport({
       url: config.hyperliquid.wsUrl,
-      timeout: 10000,
+      timeout: 30000, // 增加到30秒
       keepAlive: {
-        interval: 30000,
-        timeout: 10000,
+        interval: 20000, // 20秒心跳
+        timeout: 15000,
       },
       reconnect: {
-        maxRetries: config.hyperliquid.reconnectAttempts,
-        connectionTimeout: 10000,
-        connectionDelay: (attempt: number) => Math.min(1000 * Math.pow(2, attempt), 10000),
-        shouldReconnect: () => true,
+        maxRetries: 20, // 增加重试次数
+        connectionTimeout: 30000, // 增加连接超时
+        connectionDelay: (attempt: number) => {
+          // 更温和的退避策略，最大延迟30秒
+          return Math.min(1000 * Math.pow(1.2, attempt), 30000);
+        },
+        shouldReconnect: (error: any) => {
+          logger.debug(`批次${this.batchId} WebSocket重连判断`, { error: error?.message });
+          return true; // 总是尝试重连
+        },
       },
     });
 
@@ -81,14 +87,14 @@ class BatchMonitor {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error(`批次${this.batchId} WebSocket连接超时`));
-      }, 15000);
+      }, 10000);
 
-      // 简化连接检查 - 直接尝试创建订阅来验证连接
+      // 优化：减少等待时间，尽快开始订阅
       setTimeout(() => {
         clearTimeout(timeout);
         logger.debug(`批次${this.batchId} WebSocket连接建立成功`);
         resolve();
-      }, 1000);
+      }, 200); // 从1秒减少到200毫秒
     });
   }
 
@@ -113,45 +119,88 @@ class BatchMonitor {
   }
 
   private async subscribeToUserEvents(addressInfo: WatchedAddress): Promise<void> {
-    try {
-      const subscription = await this.client.userEvents(
-        { user: addressInfo.address as `0x${string}` },
-        (data: any) => this.handleUserEvents(data, addressInfo.address, addressInfo.label)
-      );
+    const maxRetries = 3;
+    let attempt = 0;
+    
+    while (attempt < maxRetries) {
+      try {
+        const subscription = await this.client.userEvents(
+          { user: addressInfo.address as `0x${string}` },
+          (data: any) => this.handleUserEvents(data, addressInfo.address, addressInfo.label)
+        );
 
-      this.subscriptions.set(`userEvents:${addressInfo.address}`, subscription);
-      logger.debug(`批次${this.batchId} 用户事件订阅成功: ${addressInfo.label}`);
-    } catch (error) {
-      logger.error(`批次${this.batchId} 用户事件订阅失败 ${addressInfo.label}:`, error);
+        this.subscriptions.set(`userEvents:${addressInfo.address}`, subscription);
+        logger.debug(`批次${this.batchId} 用户事件订阅成功: ${addressInfo.label}`);
+        return; // 成功则退出
+        
+      } catch (error) {
+        attempt++;
+        logger.warn(`批次${this.batchId} 用户事件订阅失败 ${addressInfo.label} (尝试 ${attempt}/${maxRetries}):`, error);
+        
+        if (attempt < maxRetries) {
+          // 等待后重试
+          await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+        }
+      }
     }
+    
+    logger.error(`批次${this.batchId} 用户事件订阅最终失败: ${addressInfo.label}`);
   }
 
   private async subscribeToUserFills(addressInfo: WatchedAddress): Promise<void> {
-    try {
-      const subscription = await this.client.userFills(
-        { user: addressInfo.address as `0x${string}` },
-        (data: any) => this.handleUserFills(data, addressInfo.address, addressInfo.label)
-      );
+    const maxRetries = 3;
+    let attempt = 0;
+    
+    while (attempt < maxRetries) {
+      try {
+        const subscription = await this.client.userFills(
+          { user: addressInfo.address as `0x${string}` },
+          (data: any) => this.handleUserFills(data, addressInfo.address, addressInfo.label)
+        );
 
-      this.subscriptions.set(`userFills:${addressInfo.address}`, subscription);
-      logger.debug(`批次${this.batchId} 用户成交订阅成功: ${addressInfo.label}`);
-    } catch (error) {
-      logger.error(`批次${this.batchId} 用户成交订阅失败 ${addressInfo.label}:`, error);
+        this.subscriptions.set(`userFills:${addressInfo.address}`, subscription);
+        logger.debug(`批次${this.batchId} 用户成交订阅成功: ${addressInfo.label}`);
+        return;
+        
+      } catch (error) {
+        attempt++;
+        logger.warn(`批次${this.batchId} 用户成交订阅失败 ${addressInfo.label} (尝试 ${attempt}/${maxRetries}):`, error);
+        
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+        }
+      }
     }
+    
+    logger.error(`批次${this.batchId} 用户成交订阅最终失败: ${addressInfo.label}`);
   }
 
   private async subscribeToLedgerUpdates(addressInfo: WatchedAddress): Promise<void> {
-    try {
-      const subscription = await this.client.userNonFundingLedgerUpdates(
-        { user: addressInfo.address as `0x${string}` },
-        (data: any) => this.handleLedgerUpdates(data, addressInfo.address, addressInfo.label)
-      );
+    const maxRetries = 3;
+    let attempt = 0;
+    
+    while (attempt < maxRetries) {
+      try {
+        const subscription = await this.client.userNonFundingLedgerUpdates(
+          { user: addressInfo.address as `0x${string}` },
+          (data: any) => this.handleLedgerUpdates(data, addressInfo.address, addressInfo.label)
+        );
 
-      this.subscriptions.set(`ledger:${addressInfo.address}`, subscription);
-      logger.debug(`批次${this.batchId} 账本更新订阅成功: ${addressInfo.label}`);
-    } catch (error) {
-      logger.error(`批次${this.batchId} 账本更新订阅失败 ${addressInfo.label}:`, error);
+        this.subscriptions.set(`ledger:${addressInfo.address}`, subscription);
+        logger.debug(`批次${this.batchId} 账本更新订阅成功: ${addressInfo.label}`);
+        return;
+        
+      } catch (error) {
+        attempt++;
+        logger.warn(`批次${this.batchId} 账本更新订阅失败 ${addressInfo.label} (尝试 ${attempt}/${maxRetries}):`, error);
+        
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+        }
+      }
     }
+    
+    logger.error(`批次${this.batchId} 账本更新订阅最终失败: ${addressInfo.label}`);
   }
 
   private async handleUserEvents(data: any, address: string, label: string): Promise<void> {
@@ -342,7 +391,7 @@ export class BatchedHyperliquidMonitor {
   private batchMonitors: BatchMonitor[] = [];
   private eventCallback: (event: MonitorEvent) => Promise<void>;
   private isRunning = false;
-  private static readonly BATCH_SIZE = 9; // 每批8个地址，确保安全余量
+  private static readonly BATCH_SIZE = 13; // 增加批次大小，减少批次数量
 
   constructor(eventCallback: (event: MonitorEvent) => Promise<void>) {
     this.eventCallback = eventCallback;

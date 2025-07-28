@@ -32,27 +32,29 @@ const WATCHED_ADDRESSES: WatchedAddress[] = [
   { address: '0xdcb0b5e41d6ed4dd834316d4177d73452014f983', label: '解锁地址24', unlockAmount: 20136.00, isActive: true },
   { address: '0xf4b03f6bf1c7d529194410dc3d0775a1d7bff09b', label: '解锁地址25', unlockAmount: 20036.19, isActive: true },
   { address: '0x7bfee91193d9df2ac0bfe90191d40f23c773c060', label: '解锁地址26', unlockAmount: 20000.00, isActive: true },
-  { address: '0x43e9abea1910387c4292bca4b94de81462f8a251', label: 'HyperLabs团队地址', unlockAmount: 240000000, isActive: true }, // 2.4亿HYPE，预计2025/11/28开始解锁
-  { address: '0xd57ecca444a9acb7208d286be439de12dd09de5d', label: 'Hyper Foundation基金会', unlockAmount: 60000000, isActive: true }, // 6000万HYPE
-  { address: '0xfefefefefefefefefefefefefefefefefefefefe', label: 'Assistance Fund援助基金', unlockAmount: 26000000, isActive: true }, // 2600万HYPE，未质押
-  { address: '0x4e14fc11f58b64740e66e4b1aa188a4b007c0eab', label: '最大个人活跃地址', unlockAmount: 1490000, isActive: true }, // 149万HYPE，未质押，流动性最强
-  { address: '0x9794bbbc222b6b93c1417d01aa1ff06d42e5333b', label: 'smartestmoney传奇交易员', unlockAmount: 3000000, isActive: true }, // 300万HYPE已质押+50万EVM
-  { address: '0xfae95f601f3a25ace60d19dbb929f2a5c57e3571', label: 'laurentzeimes第二大个人', unlockAmount: 3300000, isActive: true }, // 330万HYPE已质押
-  { address: '0x51156f7002c4f74f4956c9e0f2b7bfb6e9dbfac2', label: 'ellie_nfts地址1', unlockAmount: 800000, isActive: true }, // 集群共240万
-  { address: '0xba60e7e6c222a6eca70abb6bb011c40fdaaa565b', label: 'ellie_nfts地址2', unlockAmount: 800000, isActive: true },
-  { address: '0x9a4a2224eb1ce642a497738e6e1227a0411f3679', label: 'ellie_nfts地址3', unlockAmount: 800000, isActive: true },
-  { address: '0xfdc5a81605d8b926947d2e865f74025dd53ac314', label: '神秘巨鲸集群1', unlockAmount: 200000, isActive: true }, // 集群共230万HYPE
-  { address: '0x5d83bb3313240cab65e2e9200d3aaf3520474fb6', label: '神秘巨鲸集群2', unlockAmount: 200000, isActive: true },
-  { address: '0x316fc62528c317e569fe5aa4df6c1af0c4f2e678', label: '神秘巨鲸集群3', unlockAmount: 200000, isActive: true },
-  { address: '0x5b5d51203a0f9079f8aeb098a6523a13f298c060', label: 'Abraxas Capital机构1', unlockAmount: 1145000, isActive: true }, // 共229万
-  { address: '0xb83de012dba672c76a7dbbbf3e459cb59d7d6e36', label: 'Abraxas Capital机构2', unlockAmount: 1145000, isActive: true },
-  { address: '0xcaC19662Ec88d23Fa1c81aC0e8570B0cf2FF26b3', label: 'Galaxy Digital机构1', unlockAmount: 900000, isActive: true }, // 共180万
-  { address: '0x62bc1fe6009388219dd84f9dca37930f6fb6fa22', label: 'Galaxy Digital机构2', unlockAmount: 900000, isActive: true },
-  { address: '0xcfdb74a8c080bb7b4360ed6fe21f895c653efff4', label: 'Amber Group机构', unlockAmount: 1500000, isActive: true }, // 150万HYPE
+  // todo 增加下面这些账户的转账阈值监控
+  { address: '0x43e9abea1910387c4292bca4b94de81462f8a251', label: 'HyperLabs团队地址(大户监控)', unlockAmount: 0, isActive: true }, // 2.4亿HYPE，预计2025/11/28开始解锁
+  { address: '0xd57ecca444a9acb7208d286be439de12dd09de5d', label: 'Hyper Foundation基金会(大户监控)', unlockAmount: 0, isActive: true }, // 6000万HYPE
+  { address: '0xfefefefefefefefefefefefefefefefefefefefe', label: 'Assistance Fund援助基金(大户监控)', unlockAmount: 0, isActive: true }, // 2600万HYPE，未质押
+  { address: '0x4e14fc11f58b64740e66e4b1aa188a4b007c0eab', label: '最大个人活跃地址(大户监控)', unlockAmount: 0, isActive: true }, // 149万HYPE，未质押，流动性最强
+  { address: '0x9794bbbc222b6b93c1417d01aa1ff06d42e5333b', label: 'smartestmoney传奇交易员(大户监控)', unlockAmount: 0, isActive: true }, // 300万HYPE已质押+50万EVM
+  { address: '0xfae95f601f3a25ace60d19dbb929f2a5c57e3571', label: 'laurentzeimes第二大个人(大户监控)', unlockAmount: 0, isActive: true }, // 330万HYPE已质押
+  { address: '0x51156f7002c4f74f4956c9e0f2b7bfb6e9dbfac2', label: 'ellie_nfts地址1(大户监控)', unlockAmount: 0, isActive: true }, // 集群共240万
+  { address: '0xba60e7e6c222a6eca70abb6bb011c40fdaaa565b', label: 'ellie_nfts地址2(大户监控)', unlockAmount: 0, isActive: true },
+  { address: '0x9a4a2224eb1ce642a497738e6e1227a0411f3679', label: 'ellie_nfts地址3(大户监控)', unlockAmount: 0, isActive: true },
+  { address: '0xfdc5a81605d8b926947d2e865f74025dd53ac314', label: '神秘巨鲸集群1(大户监控)', unlockAmount: 0, isActive: true }, // 集群共230万HYPE
+  { address: '0x5d83bb3313240cab65e2e9200d3aaf3520474fb6', label: '神秘巨鲸集群2(大户监控)', unlockAmount: 0, isActive: true },
+  { address: '0x316fc62528c317e569fe5aa4df6c1af0c4f2e678', label: '神秘巨鲸集群3(大户监控)', unlockAmount: 0, isActive: true },
+  { address: '0x5b5d51203a0f9079f8aeb098a6523a13f298c060', label: 'Abraxas Capital机构1(大户监控)', unlockAmount: 0, isActive: true }, // 共229万
+  { address: '0xb83de012dba672c76a7dbbbf3e459cb59d7d6e36', label: 'Abraxas Capital机构2(大户监控)', unlockAmount: 0, isActive: true },
+  { address: '0xcaC19662Ec88d23Fa1c81aC0e8570B0cf2FF26b3', label: 'Galaxy Digital机构1(大户监控)', unlockAmount: 0, isActive: true }, // 共180万
+  { address: '0x62bc1fe6009388219dd84f9dca37930f6fb6fa22', label: 'Galaxy Digital机构2(大户监控)', unlockAmount: 0, isActive: true },
+  { address: '0xcfdb74a8c080bb7b4360ed6fe21f895c653efff4', label: 'Amber Group机构(大户监控)', unlockAmount: 0, isActive: true }, // 150万HYPE
 ];
 
 // 合约交易员监控列表
 const CONTRACT_TRADERS: ContractTrader[] = [
+  { address: '0x31ca8395cf837de08b24da3f660e77761dfb974b', label: 'test', description: 'hyperdash交易员', isActive: true },
   { address: '0xfa6af5f4f7440ce389a1e650991eea45c161e13e', label: '交易员1', description: 'hyperdash交易员', isActive: true },
   { address: '0xa04a4b7b7c37dbd271fdc57618e9cb9836b250bf', label: '交易员2', description: 'hyperdash交易员', isActive: true },
   { address: '0xb8b9e3097c8b1dddf9c5ea9d48a7ebeaf09d67d2', label: '交易员3', description: 'hyperdash交易员', isActive: true },
@@ -63,6 +65,13 @@ export const config: Config = {
   hyperliquid: {
     wsUrl: process.env.HYPERLIQUID_WS_URL || 'wss://api.hyperliquid.xyz/ws',
     reconnectAttempts: parseInt(process.env.HYPERLIQUID_RECONNECT_ATTEMPTS || '5'),
+    connectionTimeout: parseInt(process.env.CONNECTION_TIMEOUT || '45000'),
+    subscriptionTimeout: parseInt(process.env.SUBSCRIPTION_TIMEOUT || '35000'),
+    connectionDelay: parseInt(process.env.CONNECTION_DELAY || '15000'),
+    keepAliveInterval: parseInt(process.env.KEEP_ALIVE_INTERVAL || '30000'),
+    keepAliveTimeout: parseInt(process.env.KEEP_ALIVE_TIMEOUT || '25000'),
+    maxConsecutiveErrors: parseInt(process.env.MAX_CONSECUTIVE_ERRORS || '10'),
+    maxReconnectAttempts: parseInt(process.env.MAX_RECONNECT_ATTEMPTS || '5'),
   },
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
@@ -82,7 +91,7 @@ export const config: Config = {
   contractMonitoring: {
     enabled: process.env.CONTRACT_MONITORING_ENABLED === 'true',
     traders: CONTRACT_TRADERS,
-    minNotionalValue: parseFloat(process.env.CONTRACT_MIN_NOTIONAL || '1000'), // 最小1000美元名义价值
+    minNotionalValue: parseFloat(process.env.CONTRACT_MIN_NOTIONAL || '100'), // 降低到100美元名义价值
     assets: process.env.CONTRACT_ASSETS ? process.env.CONTRACT_ASSETS.split(',') : undefined,
   },
   logging: {

@@ -108,42 +108,51 @@ export class WebhookNotifier {
     const isTransferIn = alert.alertType.includes('_in');
     const isSingle = alert.alertType.includes('single_');
 
-    // 警报级别判定
+    // 优化的警报级别和图标系统
     let alertLevel = 'LOW';
-    let alertEmoji = 'ℹ️';
+    let alertEmoji = '💎'; // 默认使用钻石表示价值
+    let username = 'HYPE Whale Alert 🐋';
 
     if (parseFloat(alert.amount) >= 100000) {
       alertLevel = 'HIGH';
       alertEmoji = '🚨';
+      username = 'MEGA WHALE Alert 🦈';
     } else if (parseFloat(alert.amount) >= 50000) {
       alertLevel = 'MEDIUM';
       alertEmoji = '⚠️';
+      username = 'Big WHALE Alert 🐳';
+    } else if (parseFloat(alert.amount) >= 10000) {
+      alertLevel = 'MEDIUM';
+      alertEmoji = '🔔';
+      username = 'WHALE Alert 🐋';
     }
 
     const actionText = isTransferIn ? 'Transfer In' : 'Transfer Out';
     const thresholdType = isSingle ? 'Large Single' : '24h Cumulative';
     const directionEmoji = isTransferIn ? '📈' : '📉';
+    const actionIcon = isTransferIn ? '⬇️' : '⬆️';
 
-    // 构建简化的消息内容（移除折叠部分）
+    // 美化的消息格式
     const messageLines = [
-      `${alertEmoji} ${alertEmoji} ${alertLevel} ALERT: ${thresholdType} ${actionText}`,
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-      `🌐 Network: Hyperliquid`,
-      `Token: HYPE`,
-      `Amount: ${formatAmount(alert.amount)}${calculatePercentage(alert.amount, alert.unlockAmount)}`,
-      `Address: ${alert.address} (${alert.addressLabel || 'Unknown'})`,
-      `${alert.unlockAmount ? `Unlock Total: ${formatAmount(alert.unlockAmount.toString())} HYPE` : ''}`,
-      `Transaction: ${alert.txHash}`,
-      `Time: ${new Date(alert.blockTime).toISOString()}`,
-      `${alert.cumulativeToday ? `24h Cumulative: ${formatAmount(alert.cumulativeToday)} HYPE` : ''}`,
-      `Explorer Link: https://hypurrscan.io/tx/${alert.txHash}`
+      `${alertEmoji} **${alertLevel} ALERT**: ${thresholdType} ${actionText} ${actionIcon}`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `🌐 **Network**: Hyperliquid`,
+      `💰 **Token**: HYPE ${directionEmoji}`,
+      `📊 **Amount**: ${formatAmount(alert.amount)}${calculatePercentage(alert.amount, alert.unlockAmount)}`,
+      `🏠 **Address**: ${alert.address} (${alert.addressLabel || 'Unknown'})`,
+      `${alert.unlockAmount ? `🔓 **Unlock Total**: ${formatAmount(alert.unlockAmount.toString())} HYPE` : ''}`,
+      `🔗 **Transaction**: ${alert.txHash}`,
+      `⏰ **Time**: ${new Date(alert.blockTime).toISOString()}`,
+      `${alert.cumulativeToday ? `📈 **24h Cumulative**: ${formatAmount(alert.cumulativeToday)} HYPE` : ''}`,
     ].filter(line => line !== ''); // 过滤空行
 
-    // 简化的 payload，移除复杂的 attachments 和折叠部分
+    // 优化的 payload，适配主题化设计
     const simplePayload = {
       text: messageLines.join('\n'),
-      username: 'HYPE Monitor',
-      icon_emoji: ':robot:',
+      username: username, // 动态用户名
+      icon_emoji: ':whale:', // 鲸鱼图标
+      parseUrls: false, // Rocket.Chat特定：禁用URL解析和preview
+      attachments: [], // 确保没有附件
       // 保留基本的元数据
       alert_info: {
         alert_level: alertLevel,
@@ -161,11 +170,12 @@ export class WebhookNotifier {
       raw_alert: alert,
       metadata: {
         system: 'hype-unstaking-monitor',
-        version: '1.2.0',
+        version: '1.4.0',
         timestamp_iso: new Date(alert.timestamp).toISOString(),
         action_type: actionText,
         threshold_type: thresholdType,
-        alert_level: alertLevel
+        alert_level: alertLevel,
+        platform: 'rocket_chat'
       }
     };
 
@@ -192,46 +202,63 @@ export class WebhookNotifier {
 
     // 确定警报级别和类型 - 更新图标系统
     let alertLevel = 'INFO';
-    let actionEmoji = '📊'; // 默认图标
 
-    // 根据动作类型选择专属图标
+    // 根据动作类型选择专属图标和颜色 - 改进主题化设计
     const getActionInfo = (alertType: string, side: string) => {
       switch (alertType) {
         case 'position_open_long':
           return {
             text: 'Long Position Opened',
-            emoji: '🟢', // 绿色圆圈表示开多
-            color: 0x00FF00
+            emoji: '🚀', // 火箭表示做多开仓
+            username: 'Bull Signal 🐂',
+            icon_emoji: ':rocket:',
+            color: 0x00C851, // 更鲜艳的绿色
+            signal_type: 'LONG ENTRY'
           };
         case 'position_open_short':
           return {
             text: 'Short Position Opened',
-            emoji: '🔴', // 红色圆圈表示开空
-            color: 0xFF0000
+            emoji: '🔻', // 下降箭头表示做空开仓
+            username: 'Bear Signal 🐻',
+            icon_emoji: ':small_red_triangle_down:',
+            color: 0xFF4444, // 更鲜艳的红色
+            signal_type: 'SHORT ENTRY'
           };
         case 'position_close':
           return {
             text: 'Position Closed',
-            emoji: '⭕', // 圆形表示平仓/关闭
-            color: 0xFFFF00
+            emoji: '🎯', // 靶心表示精准平仓
+            username: 'Exit Signal 🚪',
+            icon_emoji: ':dart:',
+            color: 0xFFBB33, // 橙黄色
+            signal_type: 'POSITION EXIT'
           };
         case 'position_increase':
           return {
             text: side === 'long' ? 'Long Position Increased' : 'Short Position Increased',
-            emoji: '➕', // 加号表示加仓
-            color: 0x0099FF
+            emoji: side === 'long' ? '📊' : '📉', // 根据方向选择图表
+            username: side === 'long' ? 'Scale-In Bull 🐂' : 'Scale-In Bear 🐻',
+            icon_emoji: side === 'long' ? ':chart_with_upwards_trend:' : ':chart_with_downwards_trend:',
+            color: side === 'long' ? 0x33B5E5 : 0xFF6B35,
+            signal_type: side === 'long' ? 'LONG SCALE-IN' : 'SHORT SCALE-IN'
           };
         case 'position_decrease':
           return {
             text: side === 'long' ? 'Long Position Decreased' : 'Short Position Decreased',
-            emoji: '➖', // 减号表示减仓
-            color: 0xFF9900
+            emoji: '⚖️', // 天平表示减仓调整
+            username: 'Scale-Out Signal ⚡',
+            icon_emoji: ':scales:',
+            color: 0x9C27B0, // 紫色
+            signal_type: side === 'long' ? 'LONG SCALE-OUT' : 'SHORT SCALE-OUT'
           };
         default:
           return {
             text: 'Position Updated',
-            emoji: '📊',
-            color: 0x808080
+            emoji: '⚡',
+            username: 'Signal Bot 🤖',
+            icon_emoji: ':zap:',
+            color: 0xFF9800,
+            signal_type: 'POSITION UPDATE'
           };
       }
     };
@@ -246,46 +273,81 @@ export class WebhookNotifier {
       alertLevel = 'MEDIUM';
     }
 
-    // 操作类型转换
-    const getActionText = (alertType: string) => {
-      switch (alertType) {
-        case 'position_open_long': return 'Long Position Opened';
-        case 'position_open_short': return 'Short Position Opened';
-        case 'position_close': return 'Position Closed';
-        case 'position_increase': return 'Position Increased';
-        case 'position_decrease': return 'Position Decreased';
-        default: return 'Position Updated';
-      }
-    };
-
-    const actionText = getActionText(alert.alertType);
     const sideEmoji = alert.side === 'long' ? '📈' : '📉';
 
     // 简化交易员显示：合并标签和地址
-    const traderDisplay = `${alert.traderLabel || 'Unknown'} (${alert.address})`;
+    const traderDisplay = `${alert.traderLabel || 'Unknown'} (${alert.address.slice(0, 6)}...${alert.address.slice(-4)})`;
 
-    // 创建简洁的纯文本消息
-    const messageText = [
-      `${actionInfo.emoji} **Contract Signal**: ${actionInfo.text}`,
-      ``,
-      `**Trader**: ${traderDisplay}`,
-      `**Asset**: ${alert.asset} ${sideEmoji}`,
-      `**Size**: ${formatAmount(alert.size)}`,
-      `**Price**: $${alert.price ? formatAmount(alert.price) : 'N/A'}`,
-      `**Notional**: $${alert.notionalValue ? formatAmount(alert.notionalValue) : 'N/A'}`,
-      `${alert.leverage ? `**Leverage**: ${alert.leverage}x` : ''}`,
-      `**Time**: ${new Date(alert.blockTime).toISOString().replace('T', ' ').slice(0, 19)} UTC`,
-      `**Tx**: [View Details](${this.createHyperliquidExplorerUrl(alert.txHash, alert.address)})`,
-    ].filter(line => line !== '').join('\n');
+    // 检查是否为合并事件
+    const isMergedEvent = (alert as any).mergedCount && (alert as any).mergedCount > 1;
 
-    // 使用简单的文本格式
+    const mergedInfo = isMergedEvent ?
+      `Merged: ${(alert as any).mergedCount} trades combined` : '';
+
+    // 修复交易哈希链接生成逻辑
+    const createTxLink = (txHash: string, address: string, metadata?: any) => {
+      // 检查是否为真实交易哈希（64字符的有效十六进制且不是全零）
+      const isRealTx = txHash &&
+        txHash.startsWith('0x') &&
+        txHash.length === 66 &&
+        !/^0x0+$/.test(txHash) &&
+        !txHash.toLowerCase().includes('merged') &&
+        !txHash.toLowerCase().includes('hl_tid') &&
+        !txHash.toLowerCase().includes('hl_oid');
+
+      logger.info(`🔗 创建交易链接`, {
+        txHash: txHash?.slice(0, 20) + '...',
+        isRealTx,
+        hasMetadata: !!metadata,
+        hasOriginalTid: !!metadata?.originalTid,
+        hasOriginalOid: !!metadata?.originalOid,
+        isRealTransaction: metadata?.isRealTransaction
+      });
+
+      if (isRealTx) {
+        return `https://app.hyperliquid.xyz/explorer/tx/${txHash}`;
+      }
+      // 否则链接到用户交易页面
+      return `https://app.hyperliquid.xyz/trade/${address}`;
+    };
+
+    const txLink = createTxLink(alert.txHash, alert.address, (alert as any).metadata);
+
+    // 判断是否应该显示交易哈希链接（使用相同的逻辑）
+    const isRealTxHash = alert.txHash &&
+      alert.txHash.startsWith('0x') &&
+      alert.txHash.length === 66 &&
+      !/^0x0+$/.test(alert.txHash) &&
+      !alert.txHash.toLowerCase().includes('merged') &&
+      !alert.txHash.toLowerCase().includes('hl_tid') &&
+      !alert.txHash.toLowerCase().includes('hl_oid');
+
+    // 创建美化的消息格式 - 主题化设计
+    const messageLines = [
+      `${actionInfo.emoji} **${actionInfo.signal_type}**: ${actionInfo.text}${isMergedEvent ? ' (Merged)' : ''}`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `🎯 **Trader**: ${traderDisplay}`,
+      `💰 **Asset**: ${alert.asset} ${sideEmoji}`,
+      `📊 **Size**: ${formatAmount(alert.size)}${isMergedEvent ? ' (Combined)' : ''}`,
+      `💵 **Price**: $${alert.price ? formatAmount(alert.price) : 'N/A'}${isMergedEvent ? ' (Avg)' : ''}`,
+      `🏦 **Notional**: $${alert.notionalValue ? formatAmount(alert.notionalValue) : 'N/A'}`,
+      `${alert.leverage ? `⚡ **Leverage**: ${alert.leverage}x` : ''}`,
+      `${mergedInfo ? `🔗 **${mergedInfo}**` : ''}`,
+      `⏰ **Time**: ${new Date(alert.blockTime * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`,
+      `🔍 **Tx**: ${txLink}`,
+    ].filter(line => line !== '' && !line.includes('**:**')).join('\n');
+
+    // 使用Rocket.Chat特定的格式，禁用link preview
     const contractPayload = {
-      text: messageText,
-      username: 'Contract Monitor',
+      text: messageLines,
+      username: actionInfo.username, // 动态用户名
+      icon_emoji: actionInfo.icon_emoji, // 使用Rocket.Chat格式的emoji
+      parseUrls: false, // Rocket.Chat特定：禁用URL解析和preview
+      attachments: [], // 确保没有附件触发preview
       alert_info: {
         alert_level: alertLevel,
         trader_label: alert.traderLabel || 'Unknown',
-        action: actionText,
+        action: actionInfo.text,
         asset: alert.asset,
         side: alert.side,
         size: formatAmount(alert.size),
@@ -293,15 +355,22 @@ export class WebhookNotifier {
         notional_value: alert.notionalValue ? formatAmount(alert.notionalValue) : null,
         leverage: alert.leverage,
         address: alert.address,
-        transaction_hash: alert.txHash
+        transaction_hash: alert.txHash,
+        explorer_url: txLink,
+        is_real_tx: isRealTxHash,
+        is_merged: isMergedEvent,
+        merged_count: (alert as any).mergedCount || 1
       },
       raw_alert: alert,
       metadata: {
         system: 'hype-contract-monitor',
-        version: '1.1.0',
+        version: '1.4.0',
         timestamp_iso: new Date(alert.timestamp).toISOString(),
-        action_type: actionText,
-        alert_level: alertLevel
+        action_type: actionInfo.text,
+        alert_level: alertLevel,
+        is_merged_event: isMergedEvent,
+        disable_preview: true,
+        platform: 'rocket_chat'
       }
     };
 
@@ -309,7 +378,7 @@ export class WebhookNotifier {
       timeout: this.timeout,
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'HYPE-Contract-Monitor/1.1',
+        'User-Agent': 'HYPE-Contract-Monitor/1.4',
       },
     });
 
@@ -317,12 +386,6 @@ export class WebhookNotifier {
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-  }
-
-  private createHyperliquidExplorerUrl(txHash: string, address: string): string {
-    // Hyperliquid 的 explorer 链接格式
-    // 由于 txHash 可能不是标准的区块链交易哈希，我们使用用户页面链接
-    return `https://app.hyperliquid.xyz/trade/${address}`;
   }
 
   private getRetryDelay(attempt: number): number {

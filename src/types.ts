@@ -32,7 +32,7 @@ export interface MonitorEvent {
   };
 }
 
-// 合约交易事件类型
+// 合约交易事件类型（更新为包含实时标记）
 export interface ContractEvent {
   timestamp: number;
   address: string;
@@ -47,8 +47,31 @@ export interface ContractEvent {
   metadata?: {
     leverage?: number;
     notionalValue?: string;
+    isRealTime?: boolean; // 标记为实时数据
+    source?: string; // 数据源标识
+    originalAsset?: string; // 原始资产名称
+    markPrice?: string; // 标记价格
+    explorerUrl?: string; // 区块链浏览器链接
+    isMerged?: boolean; // 是否为合并事件
+    mergedCount?: number; // 合并的事件数量
+    originalFillsCount?: number; // 原始成交记录数量
     [key: string]: any;
   };
+}
+
+// 新增：合约信号类型（基于设计方案）
+export interface ContractSignal {
+  timestamp: number;
+  trader: ContractTrader;
+  eventType: 'position_open_long' | 'position_open_short' | 'position_close';
+  asset: string;
+  size: string;
+  price?: string;
+  side: 'long' | 'short';
+  hash: string;
+  blockTime: number;
+  notionalValue: string;
+  isRealTime: true; // 标记为实时数据
 }
 
 // 预警规则
@@ -87,6 +110,10 @@ export interface ContractWebhookAlert {
   positionSizeAfter?: string;
   notionalValue?: string;
   leverage?: number;
+  // 添加合并相关字段
+  mergedCount?: number; // 合并的成交数量
+  originalFillsCount?: number; // 原始成交记录数量
+  isMerged?: boolean; // 是否为合并事件
 }
 
 // 24小时缓存结构
@@ -109,6 +136,13 @@ export interface Config {
   hyperliquid: {
     wsUrl: string;
     reconnectAttempts: number;
+    connectionTimeout: number;
+    subscriptionTimeout: number;
+    connectionDelay: number;
+    keepAliveInterval: number;
+    keepAliveTimeout: number;
+    maxConsecutiveErrors: number;
+    maxReconnectAttempts: number;
   };
   redis: {
     url: string;
