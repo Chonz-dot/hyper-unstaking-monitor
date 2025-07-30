@@ -154,7 +154,7 @@ export interface Config {
     traders: ContractTrader[];
     minNotionalValue?: number; // 最小名义价值阈值
     assets?: string[]; // 监控的资产列表，空则监控所有
-    monitorType?: 'single' | 'pooled' | 'robust'; // 监控器类型
+    monitorType?: 'single' | 'pooled' | 'robust' | 'rpc' | 'hybrid' | 'pure-rpc'; // 监控器类型
   };
   logging: {
     level: string;
@@ -195,4 +195,4 @@ export interface AlertStats {
 export type TransferDirection = 'in' | 'out';
 export type AlertType = 'single_transfer_in' | 'single_transfer_out' | 'cumulative_transfer_in' | 'cumulative_transfer_out';
 export type ContractEventType = 'position_open_long' | 'position_open_short' | 'position_close' | 'position_increase' | 'position_decrease';
-export type MonitorType = 'single' | 'pooled' | 'robust';
+export type MonitorType = 'single' | 'pooled' | 'robust' | 'rpc' | 'hybrid' | 'pure-rpc';

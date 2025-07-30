@@ -4,10 +4,10 @@
   "description": "Real-time HYPE token transfer monitoring system",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "test": "jest",
+    "dev": "/Users/edison/.nvm/versions/node/v20.12.0/bin/npx tsx src/index.ts",
+    "build": "/Users/edison/.nvm/versions/node/v20.12.0/bin/npx tsc",
+    "start": "/Users/edison/.nvm/versions/node/v20.12.0/bin/node dist/index.js",
+    "test": "/Users/edison/.nvm/versions/node/v20.12.0/bin/npx jest",
     "docker:build": "docker-compose build",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
@@ -38,6 +38,7 @@
     "@types/ws": "^8.18.1",
     "axios": "^1.6.5",
     "dotenv": "^16.3.1",
+    "ethers": "^6.15.0",
     "redis": "^4.6.12",
     "winston": "^3.11.0",
     "ws": "^8.18.2"

@@ -10,7 +10,10 @@
 - **去重处理**: 24小时窗口内避免重复警报
 
 ### 📊 合约交易监控 (NEW!)
-- **交易员跟踪**: 监控指定交易员的合约开仓/平仓信号
+- **多种监控模式**: WebSocket实时监控 + RPC轮询监控
+- **交易员跟踪**: 监控指定交易员的合约开仓/平仓信号  
+- **智能聚合**: RPC模式自动聚合大订单子成交，避免重复警报
+- **地址验证**: 严格验证交易员地址，避免误报
 - **多空识别**: 自动识别开多、开空、平仓操作
 - **价值筛选**: 支持最小名义价值阈值过滤
 - **资产过滤**: 可配置监控特定资产（BTC、ETH等）
@@ -34,7 +37,10 @@ hyper-unstaking-monitor/
 │   │   └── alert-engine.ts      # 预警引擎
 │   ├── services/
 │   │   ├── hyperliquid-monitor.ts # Hyperliquid WebSocket监控
-│   │   └── contractMonitor.ts   # 合约交易监控 (NEW!)
+│   │   ├── webSocketContractMonitor.ts # WebSocket合约监控
+│   │   ├── pooledWebSocketContractMonitor.ts # 连接池WebSocket监控
+│   │   ├── robustWebSocketContractMonitor.ts # 稳健WebSocket监控
+│   │   └── rpcContractMonitor.ts # RPC轮询合约监控 (推荐)
 │   ├── utils/
 │   │   └── helpers.ts           # 工具函数
 │   ├── cache.ts                 # Redis缓存管理
@@ -137,7 +143,17 @@ npm run dev
 | `CONTRACT_MONITORING_ENABLED` | 是否启用合约监控 | `false` |
 | `CONTRACT_MIN_NOTIONAL` | 合约监控最小名义价值 | `1000` |
 | `CONTRACT_ASSETS` | 监控的资产列表(逗号分隔) | 全部资产 |
+| `CONTRACT_MONITOR_TYPE` | 合约监控器类型 | `rpc` |
 | `LOG_LEVEL` | 日志级别 | `info` |
+
+### 合约监控器类型
+
+| 类型 | 说明 | 优势 | 适用场景 |
+|------|------|------|---------|
+| `rpc` | RPC轮询监控器 | 稳定性高，智能聚合订单，避免重复警报 | **推荐** - 生产环境 |
+| `robust` | 稳健WebSocket监控器 | 实时性好，连接稳定性优化 | 对实时性要求高的场景 |
+| `pooled` | 连接池WebSocket监控器 | 支持更多交易员，资源利用率高 | 监控大量交易员 |
+| `single` | 单连接WebSocket监控器 | 简单易用，资源消耗低 | 监控少量交易员 |
 
 ### 监控地址
 

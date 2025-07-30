@@ -1,8 +1,15 @@
+// Node.js兼容性polyfill - 必须在所有其他导入之前
+// Promise.withResolvers 需要 Node.js v22+，为v20提供polyfill支持
+import './polyfills';
+
 import HyperliquidMonitor from './services/hyperliquid-monitor';
 import BatchedHyperliquidMonitor from './services/hyperliquid-monitor';
 import { WebSocketContractMonitor } from './services/webSocketContractMonitor';
 import PooledWebSocketContractMonitor from './services/pooledWebSocketContractMonitor';
 import RobustWebSocketContractMonitor from './services/robustWebSocketContractMonitor';
+import RpcContractMonitor from './services/rpcContractMonitor';
+import HybridRpcContractMonitor from './services/hybridRpcContractMonitor';
+import PureRpcContractMonitor from './services/pureRpcContractMonitor';
 import AlertEngine from './engine/alert-engine';
 import CacheManager from './cache';
 import WebhookNotifier from './webhook';
@@ -15,7 +22,7 @@ export const SYSTEM_START_TIME = Date.now();
 
 class HypeUnstakingMonitor {
   private hyperliquidMonitor: BatchedHyperliquidMonitor;
-  private contractMonitor?: WebSocketContractMonitor | PooledWebSocketContractMonitor | RobustWebSocketContractMonitor;
+  private contractMonitor?: WebSocketContractMonitor | PooledWebSocketContractMonitor | RobustWebSocketContractMonitor | RpcContractMonitor | HybridRpcContractMonitor | PureRpcContractMonitor;
   private alertEngine: AlertEngine;
   private cache: CacheManager;
   private notifier: WebhookNotifier;
@@ -40,7 +47,7 @@ class HypeUnstakingMonitor {
 
     if (config.contractMonitoring.enabled) {
       // 根据配置文件选择监控器类型
-      const monitorType = config.contractMonitoring.monitorType || 'robust';
+      const monitorType = config.contractMonitoring.monitorType || 'pure-rpc';
       
       logger.info(`✅ 合约监控已启用，使用${monitorType}监控器...`, {
         envValue: process.env.CONTRACT_MONITOR_TYPE,
@@ -48,10 +55,31 @@ class HypeUnstakingMonitor {
         actualMonitorType: monitorType,
         selectedMonitor: monitorType === 'pooled' ? 'PooledWebSocketContractMonitor' : 
                         monitorType === 'robust' ? 'RobustWebSocketContractMonitor' : 
+                        monitorType === 'rpc' ? 'RpcContractMonitor' :
+                        monitorType === 'hybrid' ? 'HybridRpcContractMonitor' :
+                        monitorType === 'pure-rpc' ? 'PureRpcContractMonitor' :
                         'WebSocketContractMonitor'
       });
       
       switch (monitorType) {
+        case 'pure-rpc':
+          this.contractMonitor = new PureRpcContractMonitor(
+            config.contractMonitoring.traders,
+            config.contractMonitoring.minNotionalValue
+          );
+          break;
+        case 'hybrid':
+          this.contractMonitor = new HybridRpcContractMonitor(
+            config.contractMonitoring.traders,
+            config.contractMonitoring.minNotionalValue
+          );
+          break;
+        case 'rpc':
+          this.contractMonitor = new RpcContractMonitor(
+            config.contractMonitoring.traders,
+            config.contractMonitoring.minNotionalValue
+          );
+          break;
         case 'pooled':
           this.contractMonitor = new PooledWebSocketContractMonitor(
             config.contractMonitoring.traders,

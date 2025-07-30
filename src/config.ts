@@ -93,7 +93,7 @@ export const config: Config = {
     traders: CONTRACT_TRADERS,
     minNotionalValue: parseFloat(process.env.CONTRACT_MIN_NOTIONAL || '100'), // 降低到100美元名义价值
     assets: process.env.CONTRACT_ASSETS ? process.env.CONTRACT_ASSETS.split(',') : undefined,
-    monitorType: (process.env.CONTRACT_MONITOR_TYPE as MonitorType) || 'robust', // 监控器类型选择
+    monitorType: (process.env.CONTRACT_MONITOR_TYPE as MonitorType) || 'pure-rpc', // 默认使用纯净RPC监控器
   },
   logging: {
     level: process.env.LOG_LEVEL || 'info',
