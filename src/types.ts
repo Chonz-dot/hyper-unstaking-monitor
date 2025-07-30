@@ -1,81 +1,74 @@
-// 监控地址配置接口
+// 监控地址配置
 export interface WatchedAddress {
-  address: string;
-  label: string;
-  unlockAmount: number; // 解锁数量
-  customThresholds?: {
+  address: string;          // 钱包地址
+  label: string;           // 地址标签
+  unlockAmount: number;    // 预计解锁数量
+  isActive: boolean;       // 是否启用监控
+  customThresholds?: {     // 自定义阈值
     singleTransfer: number;
-    cumulative24h: number;
+    dailyTotal: number;
+    cumulative24h?: number;
   };
-  isActive: boolean;
 }
 
-// 合约交易员配置接口
+// 合约交易员配置
 export interface ContractTrader {
-  address: string;
-  label: string;
-  description?: string;
-  isActive: boolean;
+  address: string;         // 交易员地址
+  label: string;          // 交易员标签
+  description?: string;   // 描述
+  isActive: boolean;      // 是否启用监控
 }
 
-// 监控事件类型
+// 监控事件接口
 export interface MonitorEvent {
   timestamp: number;
   address: string;
-  eventType: 'transfer_in' | 'transfer_out' | 'trade_buy' | 'trade_sell' | 'unstake' | 'deposit' | 'withdraw' | 'internal_transfer_in' | 'internal_transfer_out';
-  amount: string;
-  hash: string;
-  blockTime: number;
-  asset?: string; // 资产类型，如"HYPE"
+  eventType: 'transfer_in' | 'transfer_out' | 'trade_buy' | 'deposit' | 'withdraw';
+  amount: string;          // HYPE数量
+  hash: string;           // 交易哈希
+  blockTime: number;      // 区块时间
+  asset?: string;         // 资产名称
   metadata?: {
-    [key: string]: any; // 额外的元数据
-  };
-}
-
-// 合约交易事件类型（更新为包含实时标记）
-export interface ContractEvent {
-  timestamp: number;
-  address: string;
-  eventType: 'position_open_long' | 'position_open_short' | 'position_close' | 'position_increase' | 'position_decrease';
-  asset: string; // 交易资产，如 'BTC', 'ETH'
-  size: string; // 持仓大小
-  price?: string; // 交易价格
-  side: 'long' | 'short'; // 多空方向
-  hash: string;
-  blockTime: number;
-  positionSizeAfter?: string; // 交易后的持仓大小
-  metadata?: {
-    leverage?: number;
-    notionalValue?: string;
-    isRealTime?: boolean; // 标记为实时数据
-    source?: string; // 数据源标识
-    originalAsset?: string; // 原始资产名称
-    markPrice?: string; // 标记价格
-    explorerUrl?: string; // 区块链浏览器链接
-    isMerged?: boolean; // 是否为合并事件
-    mergedCount?: number; // 合并的事件数量
-    originalFillsCount?: number; // 原始成交记录数量
+    originalAsset?: string;
+    source?: string;
+    isRealTime?: boolean;
+    price?: string;
+    counterparty?: string;
+    usdValue?: string;
     [key: string]: any;
   };
 }
 
-// 新增：合约信号类型（基于设计方案）
-export interface ContractSignal {
+// 合约事件接口
+export interface ContractEvent {
   timestamp: number;
-  trader: ContractTrader;
-  eventType: 'position_open_long' | 'position_open_short' | 'position_close';
+  address: string;
+  eventType: 'position_open_long' | 'position_open_short' | 'position_close' | 'position_increase' | 'position_decrease';
   asset: string;
   size: string;
-  price?: string;
+  price: string;
   side: 'long' | 'short';
   hash: string;
   blockTime: number;
-  notionalValue: string;
-  isRealTime: true; // 标记为实时数据
+  positionSizeAfter?: string;
+  metadata?: {
+    notionalValue?: string;
+    leverage?: string;
+    originalAsset?: string;
+    source?: string;
+    isRealTime?: boolean;
+    markPrice?: string;
+    rawEventTime?: number;
+    isAggregated?: boolean;
+    originalFillsCount?: number;
+    aggregationTimespan?: number;
+    [key: string]: any;
+  };
 }
 
-// 预警规则
+// 警报规则配置
 export interface AlertRule {
+  id: string;
   type: 'single_transfer' | 'cumulative_transfer';
   threshold: number;
   timeWindow?: number; // 累计规则的时间窗口（小时）
@@ -109,29 +102,26 @@ export interface ContractWebhookAlert {
   blockTime: number;
   positionSizeAfter?: string;
   notionalValue?: string;
-  leverage?: number;
-  // 添加合并相关字段
-  mergedCount?: number; // 合并的成交数量
-  originalFillsCount?: number; // 原始成交记录数量
-  isMerged?: boolean; // 是否为合并事件
+  leverage?: string;
+  mergedCount?: number;
+  originalFillsCount?: number;
+  isMerged?: boolean;
 }
 
-// 24小时缓存结构
+// 缓存数据接口
 export interface DailyCache {
-  [address: string]: {
-    totalInbound: string;
-    totalOutbound: string;
-    transactions: {
-      amount: string;
-      timestamp: number;
-      txHash: string;
-      direction: 'in' | 'out';
-    }[];
-    lastReset: number;
-  };
+  totalInbound: string;  // 累计转入金额
+  totalOutbound: string; // 累计转出金额
+  transactions: {
+    amount: string;
+    timestamp: number;
+    txHash: string;
+    type: 'in' | 'out';
+  }[];
+  lastReset: number;     // 上次重置时间
 }
 
-// 应用配置
+// 系统配置接口
 export interface Config {
   hyperliquid: {
     wsUrl: string;
@@ -149,8 +139,8 @@ export interface Config {
     keyPrefix: string;
   };
   webhook: {
-    transferUrl: string; // 转账监控webhook
-    contractUrl?: string; // 合约监控webhook
+    transferUrl: string;
+    contractUrl?: string;
     timeout: number;
     retries: number;
   };
@@ -164,9 +154,45 @@ export interface Config {
     traders: ContractTrader[];
     minNotionalValue?: number; // 最小名义价值阈值
     assets?: string[]; // 监控的资产列表，空则监控所有
+    monitorType?: 'single' | 'pooled' | 'robust'; // 监控器类型
   };
   logging: {
     level: string;
     file?: string;
   };
 }
+
+// 监控状态
+export interface MonitoringStatus {
+  startTime: number;
+  lastUpdate: number;
+  totalAlerts?: number;
+  errorCount?: number;
+}
+
+// 缓存数据接口
+export interface CachedTransferData {
+  totalInbound: string;  // 累计转入金额
+  totalOutbound: string; // 累计转出金额
+  transactions: {
+    amount: string;
+    timestamp: number;
+    txHash: string;
+    type: 'in' | 'out';
+  }[];
+  lastReset: number;     // 上次重置时间
+}
+
+// 统计数据接口
+export interface AlertStats {
+  totalAlerts: number;
+  alertsByType: Record<string, number>;
+  alertsByAddress: Record<string, number>;
+  last24Hours: number;
+}
+
+// 导出所有类型
+export type TransferDirection = 'in' | 'out';
+export type AlertType = 'single_transfer_in' | 'single_transfer_out' | 'cumulative_transfer_in' | 'cumulative_transfer_out';
+export type ContractEventType = 'position_open_long' | 'position_open_short' | 'position_close' | 'position_increase' | 'position_decrease';
+export type MonitorType = 'single' | 'pooled' | 'robust';

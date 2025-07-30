@@ -30,6 +30,18 @@ export class WebSocketContractMonitor extends EventEmitter {
     totalReconnects: number;
     lastSuccessfulMessage: number;
   }>(); // 连接健康状态跟踪
+  
+  // 订单聚合管理 - 与连接池版本保持一致
+  private pendingOrderFills = new Map<string, {
+    oid: number;
+    trader: ContractTrader;
+    fills: any[];
+    totalSize: number;
+    avgPrice: number;
+    firstFill: any;
+    lastUpdate: number;
+  }>();
+  private readonly ORDER_COMPLETION_DELAY = 3000;
 
   constructor(traders: ContractTrader[], minNotionalValue = 10) {
     super();

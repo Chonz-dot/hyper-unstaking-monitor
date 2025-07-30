@@ -30,26 +30,37 @@ class BatchMonitor {
     this.eventCallback = eventCallback;
     this.batchId = batchId;
 
-    // 为每个批次创建独立的WebSocket连接
+    // 为每个批次创建独立的WebSocket连接 - 启用自动恢复
     this.transport = new hl.WebSocketTransport({
       url: config.hyperliquid.wsUrl,
-      timeout: 30000, // 增加到30秒
+      timeout: 45000, // 与合约监控一致
       keepAlive: {
-        interval: 20000, // 20秒心跳
+        interval: 25000, // 与合约监控一致
         timeout: 15000,
       },
       reconnect: {
-        maxRetries: 20, // 增加重试次数
-        connectionTimeout: 30000, // 增加连接超时
+        maxRetries: 30, // 增加重试次数
+        connectionTimeout: 45000, // 与合约监控一致
         connectionDelay: (attempt: number) => {
-          // 更温和的退避策略，最大延迟30秒
-          return Math.min(1000 * Math.pow(1.2, attempt), 30000);
+          // 渐进退避策略，与合约监控一致
+          return Math.min(2000 * Math.pow(2, attempt - 1), 32000);
         },
         shouldReconnect: (error: any) => {
-          logger.debug(`批次${this.batchId} WebSocket重连判断`, { error: error?.message });
-          return true; // 总是尝试重连
+          // 智能重连判断，与合约监控一致
+          const errorMessage = error?.message?.toLowerCase() || '';
+          if (errorMessage.includes('unauthorized') || errorMessage.includes('forbidden')) {
+            logger.error(`批次${this.batchId} 认证错误，停止重连`, { error: errorMessage });
+            return false;
+          }
+
+          logger.debug(`批次${this.batchId} WebSocket重连判断`, {
+            error: errorMessage,
+            willReconnect: true
+          });
+          return true;
         },
       },
+      autoResubscribe: true, // 🔥 启用自动重订阅功能！
     });
 
     this.client = new hl.SubscriptionClient({
@@ -65,22 +76,32 @@ class BatchMonitor {
         addresses: this.addresses.map(addr => addr.label)
       });
 
-      // 等待WebSocket连接建立
-      await this.waitForConnection();
-
-      // 为这批地址创建所有必要的订阅
-      await this.subscribeToAddresses();
-
-      this.isRunning = true;
-      logger.info(`批次${this.batchId}监控器启动成功`, {
-        batchId: this.batchId,
-        subscriptionsCount: this.subscriptions.size
-      });
+      // 添加启动超时机制
+      await Promise.race([
+        this.startWithTimeout(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error(`批次${this.batchId}启动超时`)), 120000) // 2分钟超时
+        )
+      ]);
 
     } catch (error) {
       logger.error(`批次${this.batchId}监控器启动失败:`, error);
       throw error;
     }
+  }
+
+  private async startWithTimeout(): Promise<void> {
+    // 等待WebSocket连接建立
+    await this.waitForConnection();
+
+    // 为这批地址创建所有必要的订阅
+    await this.subscribeToAddresses();
+
+    this.isRunning = true;
+    logger.info(`批次${this.batchId}监控器启动成功`, {
+      batchId: this.batchId,
+      subscriptionsCount: this.subscriptions.size
+    });
   }
 
   private async waitForConnection(): Promise<void> {
@@ -107,100 +128,129 @@ class BatchMonitor {
         continue;
       }
 
-      // 为每个地址创建三种订阅
+      // 为每个地址创建三种订阅，使用独立的Promise避免全部失败
       subscriptionPromises.push(
-        this.subscribeToUserEvents(addressInfo),
-        this.subscribeToUserFills(addressInfo),
-        this.subscribeToLedgerUpdates(addressInfo)
+        this.subscribeToUserEvents(addressInfo).catch(error => {
+          logger.error(`批次${this.batchId} 用户事件订阅失败: ${addressInfo.label}`, error);
+        }),
+        this.subscribeToUserFills(addressInfo).catch(error => {
+          logger.error(`批次${this.batchId} 用户成交订阅失败: ${addressInfo.label}`, error);
+        }),
+        this.subscribeToLedgerUpdates(addressInfo).catch(error => {
+          logger.error(`批次${this.batchId} 账本更新订阅失败: ${addressInfo.label}`, error);
+        })
       );
     }
 
-    await Promise.all(subscriptionPromises);
+    // 等待所有订阅尝试完成，不因单个失败而中断
+    await Promise.allSettled(subscriptionPromises);
+    
+    logger.info(`批次${this.batchId} 订阅完成`, {
+      总订阅数: this.subscriptions.size,
+      地址数: this.addresses.filter(a => a.isActive).length,
+      预期订阅数: this.addresses.filter(a => a.isActive).length * 3
+    });
   }
 
   private async subscribeToUserEvents(addressInfo: WatchedAddress): Promise<void> {
     const maxRetries = 3;
     let attempt = 0;
-    
+
     while (attempt < maxRetries) {
       try {
-        const subscription = await this.client.userEvents(
-          { user: addressInfo.address as `0x${string}` },
-          (data: any) => this.handleUserEvents(data, addressInfo.address, addressInfo.label)
+        // 使用超时Promise包装，与合约监控一致
+        const subscription = await this.subscribeWithTimeout(
+          () => this.client.userEvents(
+            { user: addressInfo.address as `0x${string}` },
+            (data: any) => this.handleUserEvents(data, addressInfo.address, addressInfo.label)
+          ),
+          `批次${this.batchId} ${addressInfo.label} userEvents`,
+          35000 // 35秒超时，与合约一致
         );
 
         this.subscriptions.set(`userEvents:${addressInfo.address}`, subscription);
         logger.debug(`批次${this.batchId} 用户事件订阅成功: ${addressInfo.label}`);
         return; // 成功则退出
-        
+
       } catch (error) {
         attempt++;
         logger.warn(`批次${this.batchId} 用户事件订阅失败 ${addressInfo.label} (尝试 ${attempt}/${maxRetries}):`, error);
-        
+
         if (attempt < maxRetries) {
           // 等待后重试
           await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
         }
       }
     }
-    
+
     logger.error(`批次${this.batchId} 用户事件订阅最终失败: ${addressInfo.label}`);
+    throw new Error(`用户事件订阅失败: ${addressInfo.label}`);
   }
 
   private async subscribeToUserFills(addressInfo: WatchedAddress): Promise<void> {
     const maxRetries = 3;
     let attempt = 0;
-    
+
     while (attempt < maxRetries) {
       try {
-        const subscription = await this.client.userFills(
-          { user: addressInfo.address as `0x${string}` },
-          (data: any) => this.handleUserFills(data, addressInfo.address, addressInfo.label)
+        const subscription = await this.subscribeWithTimeout(
+          () => this.client.userFills(
+            { user: addressInfo.address as `0x${string}` },
+            (data: any) => this.handleUserFills(data, addressInfo.address, addressInfo.label)
+          ),
+          `批次${this.batchId} ${addressInfo.label} userFills`,
+          35000
         );
 
         this.subscriptions.set(`userFills:${addressInfo.address}`, subscription);
         logger.debug(`批次${this.batchId} 用户成交订阅成功: ${addressInfo.label}`);
         return;
-        
+
       } catch (error) {
         attempt++;
         logger.warn(`批次${this.batchId} 用户成交订阅失败 ${addressInfo.label} (尝试 ${attempt}/${maxRetries}):`, error);
-        
+
         if (attempt < maxRetries) {
           await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
         }
       }
     }
-    
+
     logger.error(`批次${this.batchId} 用户成交订阅最终失败: ${addressInfo.label}`);
+    throw new Error(`用户成交订阅失败: ${addressInfo.label}`);
   }
 
   private async subscribeToLedgerUpdates(addressInfo: WatchedAddress): Promise<void> {
     const maxRetries = 3;
     let attempt = 0;
-    
+
     while (attempt < maxRetries) {
       try {
-        const subscription = await this.client.userNonFundingLedgerUpdates(
-          { user: addressInfo.address as `0x${string}` },
-          (data: any) => this.handleLedgerUpdates(data, addressInfo.address, addressInfo.label)
+        const subscription = await this.subscribeWithTimeout(
+          () => this.client.userNonFundingLedgerUpdates(
+            { user: addressInfo.address as `0x${string}` },
+            (data: any) => this.handleLedgerUpdates(data, addressInfo.address, addressInfo.label)
+          ),
+          `批次${this.batchId} ${addressInfo.label} ledgerUpdates`,
+          35000
         );
 
         this.subscriptions.set(`ledger:${addressInfo.address}`, subscription);
         logger.debug(`批次${this.batchId} 账本更新订阅成功: ${addressInfo.label}`);
         return;
-        
+
       } catch (error) {
         attempt++;
         logger.warn(`批次${this.batchId} 账本更新订阅失败 ${addressInfo.label} (尝试 ${attempt}/${maxRetries}):`, error);
-        
+
         if (attempt < maxRetries) {
           await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
         }
       }
     }
-    
+
     logger.error(`批次${this.batchId} 账本更新订阅最终失败: ${addressInfo.label}`);
+    throw new Error(`账本更新订阅失败: ${addressInfo.label}`);
   }
 
   private async handleUserEvents(data: any, address: string, label: string): Promise<void> {
@@ -346,6 +396,36 @@ class BatchMonitor {
     } catch (error) {
       logger.error(`批次${this.batchId} 处理用户成交失败 ${label}:`, error);
     }
+  }
+
+  // 超时包装方法，与合约监控保持一致
+  private async subscribeWithTimeout<T>(
+    subscriptionFn: () => Promise<T>,
+    description: string,
+    timeoutMs: number
+  ): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`${description} 订阅超时 (${timeoutMs / 1000}秒)`));
+      }, timeoutMs);
+
+      logger.debug(`🔗 ${description} 开始订阅...`);
+
+      subscriptionFn()
+        .then((subscription) => {
+          clearTimeout(timeout);
+          logger.debug(`📋 ${description} 订阅成功`);
+          resolve(subscription);
+        })
+        .catch((error) => {
+          clearTimeout(timeout);
+          logger.error(`💥 ${description} 订阅失败:`, {
+            error: error instanceof Error ? error.message : String(error),
+            errorType: error?.constructor?.name
+          });
+          reject(error);
+        });
+    });
   }
 
   async stop(): Promise<void> {

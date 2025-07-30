@@ -1,8 +1,7 @@
 import { createClient, RedisClientType } from 'redis';
 import config from './config';
 import logger from './logger';
-import { DailyCache } from './types';
-import { SYSTEM_START_TIME } from './index';
+import { DailyCache, MonitorEvent, MonitoringStatus } from './types';
 
 export class CacheManager {
   private redis: RedisClientType;
@@ -15,15 +14,20 @@ export class CacheManager {
 
     this.redis.on('error', (err) => {
       logger.error('Redis连接错误:', err);
+      this.isConnected = false;
     });
 
     this.redis.on('connect', () => {
-      logger.info('Redis连接成功');
+      logger.info('Redis连接已建立');
+    });
+
+    this.redis.on('ready', () => {
+      logger.info('Redis连接就绪');
       this.isConnected = true;
     });
 
-    this.redis.on('disconnect', () => {
-      logger.warn('Redis连接断开');
+    this.redis.on('end', () => {
+      logger.warn('Redis连接已断开');
       this.isConnected = false;
     });
   }
@@ -31,9 +35,12 @@ export class CacheManager {
   async connect(): Promise<void> {
     try {
       await this.redis.connect();
-      logger.info('Redis客户端连接建立');
+      logger.info('Redis缓存管理器初始化完成', {
+        url: config.redis.url,
+        keyPrefix: config.redis.keyPrefix
+      });
     } catch (error) {
-      logger.error('连接Redis失败:', error);
+      logger.error('Redis连接失败:', error);
       throw error;
     }
   }
@@ -47,166 +54,227 @@ export class CacheManager {
     }
   }
 
-  private getKey(suffix: string): string {
-    return `${config.redis.keyPrefix}${suffix}`;
+  private getKey(type: string, identifier?: string): string {
+    return identifier 
+      ? `${config.redis.keyPrefix}${type}:${identifier}`
+      : `${config.redis.keyPrefix}${type}`;
   }
 
-  // 获取24小时累计数据（基于系统启动时间）
-  async get24HourCache(address: string): Promise<DailyCache[string] | null> {
+  // 更新日常缓存数据
+  async updateDailyCache(address: string, event: MonitorEvent): Promise<void> {
+    if (!this.isConnected) {
+      logger.warn('Redis未连接，跳过缓存更新');
+      return;
+    }
+
     try {
-      const key = this.getKey(`24hour:${address}`);
-      const data = await this.redis.get(key);
-      return data ? JSON.parse(data) : null;
+      const key = this.getKey('daily', address.toLowerCase());
+      const amount = parseFloat(event.amount);
+      const direction = event.eventType.includes('in') ? 'in' : 'out';
+
+      // 获取现有缓存
+      const cached = await this.redis.get(key);
+      let dailyCache: DailyCache;
+
+      if (cached) {
+        dailyCache = JSON.parse(cached);
+      } else {
+        dailyCache = {
+          totalInbound: '0',
+          totalOutbound: '0',
+          transactions: [],
+          lastReset: Date.now()
+        };
+      }
+
+      // 检查是否需要重置（24小时后）
+      const now = Date.now();
+      const hoursElapsed = (now - dailyCache.lastReset) / (1000 * 60 * 60);
+      
+      if (hoursElapsed >= 24) {
+        // 重置24小时数据
+        dailyCache = {
+          totalInbound: '0',
+          totalOutbound: '0',
+          transactions: [],
+          lastReset: now
+        };
+        logger.debug('重置24小时累计数据', { address, hoursElapsed });
+      }
+
+      // 更新累计金额
+      if (direction === 'in') {
+        dailyCache.totalInbound = (parseFloat(dailyCache.totalInbound) + amount).toString();
+      } else {
+        dailyCache.totalOutbound = (parseFloat(dailyCache.totalOutbound) + amount).toString();
+      }
+
+      // 添加交易记录
+      const transaction = {
+        amount: event.amount,
+        timestamp: event.timestamp,
+        txHash: event.hash,
+        type: direction as 'in' | 'out'
+      };
+
+      dailyCache.transactions.push(transaction);
+
+      // 保留最近100笔交易记录
+      if (dailyCache.transactions.length > 100) {
+        dailyCache.transactions = dailyCache.transactions.slice(-100);
+      }
+
+      // 保存到Redis，设置25小时TTL
+      await this.redis.setEx(key, 25 * 60 * 60, JSON.stringify(dailyCache));
+
+      logger.debug('日常缓存已更新', {
+        address,
+        direction,
+        amount: event.amount,
+        totalInbound: dailyCache.totalInbound,
+        totalOutbound: dailyCache.totalOutbound,
+        transactionCount: dailyCache.transactions.length
+      });
+
     } catch (error) {
-      logger.error(`获取24小时缓存失败 ${address}:`, error);
+      logger.error('更新日常缓存失败:', error, { address, event });
+    }
+  }
+
+  // 获取日常缓存数据
+  async getDailyCache(address: string): Promise<DailyCache | null> {
+    if (!this.isConnected) {
+      logger.warn('Redis未连接，返回空缓存');
+      return null;
+    }
+
+    try {
+      const key = this.getKey('daily', address.toLowerCase());
+      const cached = await this.redis.get(key);
+
+      if (!cached) {
+        return null;
+      }
+
+      const dailyCache: DailyCache = JSON.parse(cached);
+
+      // 检查数据是否过期
+      const now = Date.now();
+      const hoursElapsed = (now - dailyCache.lastReset) / (1000 * 60 * 60);
+      
+      if (hoursElapsed >= 24) {
+        // 数据已过期，返回空数据
+        logger.debug('缓存数据已过期，返回空数据', { address, hoursElapsed });
+        return null;
+      }
+
+      return dailyCache;
+
+    } catch (error) {
+      logger.error('获取日常缓存失败:', error, { address });
       return null;
     }
   }
 
-  // 更新24小时累计数据（基于系统启动时间）
-  async update24HourCache(
-    address: string,
-    amount: string,
-    txHash: string,
-    direction: 'in' | 'out',
-    eventTimestamp: number
-  ): Promise<void> {
-    try {
-      // 验证事件是否在系统启动后发生
-      if (eventTimestamp < SYSTEM_START_TIME) {
-        logger.debug(`跳过系统启动前的历史交易: ${txHash.substring(0, 10)}...`, {
-          eventTime: new Date(eventTimestamp).toISOString(),
-          systemStartTime: new Date(SYSTEM_START_TIME).toISOString()
-        });
-        return;
-      }
-
-      const key = this.getKey(`24hour:${address}`);
-      const windowStart = this.get24HourWindowStart();
-      
-      let cache = await this.get24HourCache(address);
-      
-      if (!cache || cache.lastReset < windowStart) {
-        // 新的24小时窗口，重置缓存
-        cache = {
-          totalInbound: '0',
-          totalOutbound: '0',
-          transactions: [],
-          lastReset: windowStart,
-        };
-      }
-
-      // 过滤出当前24小时窗口内的交易
-      cache.transactions = cache.transactions.filter(tx => tx.timestamp >= windowStart);
-
-      // 添加新交易
-      cache.transactions.push({
-        amount,
-        timestamp: eventTimestamp,
-        txHash,
-        direction,
-      });
-
-      // 重新计算累计金额（基于过滤后的交易）
-      let totalInbound = 0;
-      let totalOutbound = 0;
-      
-      for (const tx of cache.transactions) {
-        const txAmount = parseFloat(tx.amount);
-        if (tx.direction === 'in') {
-          totalInbound += txAmount;
-        } else {
-          totalOutbound += txAmount;
-        }
-      }
-
-      cache.totalInbound = totalInbound.toString();
-      cache.totalOutbound = totalOutbound.toString();
-
-      // 保存到Redis，25小时TTL
-      await this.redis.setEx(key, 25 * 60 * 60, JSON.stringify(cache));
-      
-      logger.debug(`更新24小时缓存: ${address}`, {
-        direction,
-        amount,
-        totalInbound: cache.totalInbound,
-        totalOutbound: cache.totalOutbound,
-        transactionCount: cache.transactions.length,
-        windowStart: new Date(windowStart).toISOString()
-      });
-      
-    } catch (error) {
-      logger.error(`更新24小时缓存失败 ${address}:`, error);
+  // 更新监控状态
+  async updateMonitoringStatus(status: MonitoringStatus): Promise<void> {
+    if (!this.isConnected) {
+      logger.warn('Redis未连接，跳过状态更新');
+      return;
     }
-  }
 
-  // 检查交易是否已处理（去重）
-  async isTransactionProcessed(txHash: string): Promise<boolean> {
     try {
-      const key = this.getKey(`processed:${txHash}`);
-      const exists = await this.redis.exists(key);
-      return exists === 1;
+      const key = this.getKey('status');
+      await this.redis.setEx(key, 60 * 60, JSON.stringify(status)); // 1小时TTL
+      
+      logger.debug('监控状态已更新', status);
     } catch (error) {
-      logger.error(`检查交易处理状态失败 ${txHash}:`, error);
-      return false;
+      logger.error('更新监控状态失败:', error);
     }
-  }
-
-  // 标记交易已处理
-  async markTransactionProcessed(txHash: string): Promise<void> {
-    try {
-      const key = this.getKey(`processed:${txHash}`);
-      // 25小时TTL，确保去重窗口
-      await this.redis.setEx(key, 25 * 60 * 60, '1');
-    } catch (error) {
-      logger.error(`标记交易处理失败 ${txHash}:`, error);
-    }
-  }
-
-  // 获取24小时窗口开始时间戳（基于系统启动时间）
-  private get24HourWindowStart(): number {
-    const now = Date.now();
-    const hoursFromStart = Math.floor((now - SYSTEM_START_TIME) / (24 * 60 * 60 * 1000));
-    return SYSTEM_START_TIME + (hoursFromStart * 24 * 60 * 60 * 1000);
-  }
-
-  // 兼容性方法：getDailyCache -> get24HourCache
-  async getDailyCache(address: string): Promise<DailyCache[string] | null> {
-    return this.get24HourCache(address);
-  }
-
-  // 兼容性方法：updateDailyCache -> update24HourCache
-  async updateDailyCache(
-    address: string,
-    amount: string,
-    txHash: string,
-    direction: 'in' | 'out',
-    eventTimestamp?: number
-  ): Promise<void> {
-    // 如果没有提供事件时间戳，使用当前时间（用于实时事件）
-    const timestamp = eventTimestamp || Date.now();
-    return this.update24HourCache(address, amount, txHash, direction, timestamp);
   }
 
   // 获取监控状态
-  async getMonitoringStatus(): Promise<{ startTime: number; lastUpdate: number } | null> {
+  async getMonitoringStatus(): Promise<MonitoringStatus | null> {
+    if (!this.isConnected) {
+      return null;
+    }
+
     try {
       const key = this.getKey('status');
-      const data = await this.redis.get(key);
-      return data ? JSON.parse(data) : null;
+      const cached = await this.redis.get(key);
+      
+      return cached ? JSON.parse(cached) : null;
     } catch (error) {
       logger.error('获取监控状态失败:', error);
       return null;
     }
   }
 
-  // 更新监控状态
-  async updateMonitoringStatus(status: { startTime: number; lastUpdate: number }): Promise<void> {
+  // 清理过期数据
+  async cleanup(): Promise<void> {
+    if (!this.isConnected) {
+      return;
+    }
+
     try {
-      const key = this.getKey('status');
-      await this.redis.set(key, JSON.stringify(status));
+      // 清理24小时前的数据
+      const pattern = this.getKey('daily', '*');
+      const keys = await this.redis.keys(pattern);
+      
+      let cleanedCount = 0;
+      for (const key of keys) {
+        const cached = await this.redis.get(key);
+        if (cached) {
+          const dailyCache: DailyCache = JSON.parse(cached);
+          const hoursElapsed = (Date.now() - dailyCache.lastReset) / (1000 * 60 * 60);
+          
+          if (hoursElapsed >= 25) { // 25小时后删除
+            await this.redis.del(key);
+            cleanedCount++;
+          }
+        }
+      }
+
+      if (cleanedCount > 0) {
+        logger.info('清理过期缓存完成', { cleanedCount });
+      }
+
     } catch (error) {
-      logger.error('更新监控状态失败:', error);
+      logger.error('清理缓存失败:', error);
+    }
+  }
+
+  // 获取缓存统计
+  async getStats(): Promise<{
+    totalKeys: number;
+    dailyCacheKeys: number;
+    isConnected: boolean;
+  }> {
+    if (!this.isConnected) {
+      return {
+        totalKeys: 0,
+        dailyCacheKeys: 0,
+        isConnected: false
+      };
+    }
+
+    try {
+      const allKeys = await this.redis.keys(this.getKey('*'));
+      const dailyKeys = await this.redis.keys(this.getKey('daily', '*'));
+
+      return {
+        totalKeys: allKeys.length,
+        dailyCacheKeys: dailyKeys.length,
+        isConnected: this.isConnected
+      };
+
+    } catch (error) {
+      logger.error('获取缓存统计失败:', error);
+      return {
+        totalKeys: 0,
+        dailyCacheKeys: 0,
+        isConnected: this.isConnected
+      };
     }
   }
 }

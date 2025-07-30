@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { Config, WatchedAddress, ContractTrader } from './types';
+import { Config, WatchedAddress, ContractTrader, MonitorType } from './types';
 
 // 加载环境变量
 dotenv.config();
@@ -54,11 +54,11 @@ const WATCHED_ADDRESSES: WatchedAddress[] = [
 
 // 合约交易员监控列表
 const CONTRACT_TRADERS: ContractTrader[] = [
-  { address: '0x31ca8395cf837de08b24da3f660e77761dfb974b', label: 'test', description: 'hyperdash交易员', isActive: true },
   { address: '0xfa6af5f4f7440ce389a1e650991eea45c161e13e', label: '交易员1', description: 'hyperdash交易员', isActive: true },
   { address: '0xa04a4b7b7c37dbd271fdc57618e9cb9836b250bf', label: '交易员2', description: 'hyperdash交易员', isActive: true },
   { address: '0xb8b9e3097c8b1dddf9c5ea9d48a7ebeaf09d67d2', label: '交易员3', description: 'hyperdash交易员', isActive: true },
   { address: '0xd5ff5491f6f3c80438e02c281726757baf4d1070', label: '交易员4', description: 'hyperdash交易员', isActive: true },
+  { address: '0x31ca8395cf837de08b24da3f660e77761dfb974b', label: 'test', description: 'hyperdash交易员', isActive: true },
 ];
 
 export const config: Config = {
@@ -93,6 +93,7 @@ export const config: Config = {
     traders: CONTRACT_TRADERS,
     minNotionalValue: parseFloat(process.env.CONTRACT_MIN_NOTIONAL || '100'), // 降低到100美元名义价值
     assets: process.env.CONTRACT_ASSETS ? process.env.CONTRACT_ASSETS.split(',') : undefined,
+    monitorType: (process.env.CONTRACT_MONITOR_TYPE as MonitorType) || 'robust', // 监控器类型选择
   },
   logging: {
     level: process.env.LOG_LEVEL || 'info',

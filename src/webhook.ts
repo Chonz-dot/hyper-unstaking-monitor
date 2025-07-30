@@ -108,41 +108,55 @@ export class WebhookNotifier {
     const isTransferIn = alert.alertType.includes('_in');
     const isSingle = alert.alertType.includes('single_');
 
-    // 优化的警报级别和图标系统
+    // 主题化的警报级别和图标系统 - 与合约风格统一
     let alertLevel = 'LOW';
-    let alertEmoji = '💎'; // 默认使用钻石表示价值
-    let username = 'HYPE Whale Alert 🐋';
+    let alertEmoji = '💎'; // 钻石表示价值
+    let username = 'HYPE Flow Monitor 💫';
+    let signalType = 'FLOW DETECTED';
 
-    if (parseFloat(alert.amount) >= 100000) {
+    // 根据金额和类型确定警报级别和主题
+    const amount = parseFloat(alert.amount);
+    if (amount >= 100000) {
       alertLevel = 'HIGH';
-      alertEmoji = '🚨';
-      username = 'MEGA WHALE Alert 🦈';
-    } else if (parseFloat(alert.amount) >= 50000) {
+      alertEmoji = isTransferIn ? '🌊' : '🌋'; // 海啸流入 vs 火山流出
+      username = isTransferIn ? 'TSUNAMI Inflow 🌊' : 'VOLCANO Outflow 🌋';
+      signalType = isTransferIn ? 'MEGA INFLOW' : 'MEGA OUTFLOW';
+    } else if (amount >= 50000) {
       alertLevel = 'MEDIUM';
-      alertEmoji = '⚠️';
-      username = 'Big WHALE Alert 🐳';
-    } else if (parseFloat(alert.amount) >= 10000) {
+      alertEmoji = isTransferIn ? '🐋' : '🦈'; // 鲸鱼流入 vs 鲨鱼流出
+      username = isTransferIn ? 'WHALE Inflow 🐋' : 'SHARK Outflow 🦈';
+      signalType = isTransferIn ? 'BIG INFLOW' : 'BIG OUTFLOW';
+    } else if (amount >= 10000) {
       alertLevel = 'MEDIUM';
-      alertEmoji = '🔔';
-      username = 'WHALE Alert 🐋';
+      alertEmoji = isTransferIn ? '🐟' : '🏃'; // 鱼群流入 vs 资金逃离
+      username = isTransferIn ? 'Fish School Inflow 🐟' : 'Capital Flight 🏃';
+      signalType = isTransferIn ? 'NOTABLE INFLOW' : 'NOTABLE OUTFLOW';
     }
 
     const actionText = isTransferIn ? 'Transfer In' : 'Transfer Out';
     const thresholdType = isSingle ? 'Large Single' : '24h Cumulative';
     const directionEmoji = isTransferIn ? '📈' : '📉';
-    const actionIcon = isTransferIn ? '⬇️' : '⬆️';
+    const flowIcon = isTransferIn ? '⬇️' : '⬆️';
 
-    // 美化的消息格式
+    // 为转账添加区块浏览器链接
+    const createTransferTxLink = (txHash: string) => {
+      // Hyperliquid主网区块浏览器链接
+      return `https://hypurrscan.io/tx/${txHash}`;
+    };
+
+    const transferTxLink = createTransferTxLink(alert.txHash);
+
+    // 统一的美化消息格式 - 与合约警报一致的风格
     const messageLines = [
-      `${alertEmoji} **${alertLevel} ALERT**: ${thresholdType} ${actionText} ${actionIcon}`,
+      `${alertEmoji} **${signalType}**: ${thresholdType} ${actionText} ${flowIcon}`,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `🌐 **Network**: Hyperliquid`,
       `💰 **Token**: HYPE ${directionEmoji}`,
       `📊 **Amount**: ${formatAmount(alert.amount)}${calculatePercentage(alert.amount, alert.unlockAmount)}`,
-      `🏠 **Address**: ${alert.address} (${alert.addressLabel || 'Unknown'})`,
+      `🏠 **Address**: ${alert.address.slice(0, 6)}...${alert.address.slice(-4)} (${alert.addressLabel || 'Unknown'})`,
       `${alert.unlockAmount ? `🔓 **Unlock Total**: ${formatAmount(alert.unlockAmount.toString())} HYPE` : ''}`,
-      `🔗 **Transaction**: ${alert.txHash}`,
-      `⏰ **Time**: ${new Date(alert.blockTime).toISOString()}`,
+      `🔗 **Transaction**: ${transferTxLink}`,
+      `⏰ **Time**: ${new Date(alert.blockTime * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`,
       `${alert.cumulativeToday ? `📈 **24h Cumulative**: ${formatAmount(alert.cumulativeToday)} HYPE` : ''}`,
     ].filter(line => line !== ''); // 过滤空行
 
@@ -164,7 +178,7 @@ export class WebhookNotifier {
         unlock_amount: alert.unlockAmount ? formatAmount(alert.unlockAmount.toString()) : null,
         percentage: alert.unlockAmount ? ((parseFloat(alert.amount) / alert.unlockAmount) * 100).toFixed(4) + '%' : null,
         cumulative_24h: alert.cumulativeToday ? formatAmount(alert.cumulativeToday) : null,
-        explorer_link: `https://hypurrscan.io/tx/${alert.txHash}`
+        explorer_link: transferTxLink
       },
       // 原始数据
       raw_alert: alert,
@@ -279,13 +293,13 @@ export class WebhookNotifier {
     const traderDisplay = `${alert.traderLabel || 'Unknown'} (${alert.address.slice(0, 6)}...${alert.address.slice(-4)})`;
 
     // 检查是否为合并事件
-    const isMergedEvent = (alert as any).mergedCount && (alert as any).mergedCount > 1;
+    const isMergedEvent = alert.mergedCount && alert.mergedCount > 1;
 
     const mergedInfo = isMergedEvent ?
-      `Merged: ${(alert as any).mergedCount} trades combined` : '';
+      `Merged: ${alert.mergedCount} trades combined` : '';
 
     // 修复交易哈希链接生成逻辑
-    const createTxLink = (txHash: string, address: string, metadata?: any) => {
+    const createTxLink = (txHash: string, address: string) => {
       // 检查是否为真实交易哈希（64字符的有效十六进制且不是全零）
       const isRealTx = txHash &&
         txHash.startsWith('0x') &&
@@ -295,15 +309,6 @@ export class WebhookNotifier {
         !txHash.toLowerCase().includes('hl_tid') &&
         !txHash.toLowerCase().includes('hl_oid');
 
-      logger.info(`🔗 创建交易链接`, {
-        txHash: txHash?.slice(0, 20) + '...',
-        isRealTx,
-        hasMetadata: !!metadata,
-        hasOriginalTid: !!metadata?.originalTid,
-        hasOriginalOid: !!metadata?.originalOid,
-        isRealTransaction: metadata?.isRealTransaction
-      });
-
       if (isRealTx) {
         return `https://app.hyperliquid.xyz/explorer/tx/${txHash}`;
       }
@@ -311,7 +316,7 @@ export class WebhookNotifier {
       return `https://app.hyperliquid.xyz/trade/${address}`;
     };
 
-    const txLink = createTxLink(alert.txHash, alert.address, (alert as any).metadata);
+    const txLink = createTxLink(alert.txHash, alert.address);
 
     // 判断是否应该显示交易哈希链接（使用相同的逻辑）
     const isRealTxHash = alert.txHash &&
@@ -359,7 +364,7 @@ export class WebhookNotifier {
         explorer_url: txLink,
         is_real_tx: isRealTxHash,
         is_merged: isMergedEvent,
-        merged_count: (alert as any).mergedCount || 1
+        merged_count: alert.mergedCount || 1
       },
       raw_alert: alert,
       metadata: {

@@ -22,6 +22,18 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
   private consecutiveErrors = 0;
   private maxConsecutiveErrors: number;
   
+  // 订单聚合管理 - 解决子订单重复警报问题
+  private pendingOrderFills = new Map<string, {
+    oid: number;
+    trader: ContractTrader;
+    fills: any[];
+    totalSize: number;
+    avgPrice: number;
+    firstFill: any;
+    lastUpdate: number;
+  }>();
+  private readonly ORDER_COMPLETION_DELAY = 3000; // 3秒内无新fill认为订单完成
+  
   // 连接池配置
   private readonly POOL_SIZE = 2; // 使用2个连接池
   private connectionPools = new Map<number, {
@@ -60,18 +72,39 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
       return;
     }
 
+    // 清理可能存在的旧连接
+    if (this.connectionPools.size > 0) {
+      logger.info('🧹 清理现有连接池...');
+      await this.forceCleanupPools();
+      // 等待一段时间确保连接完全释放
+      await new Promise(resolve => setTimeout(resolve, 10000));
+    }
+
     logger.info('🚀 启动连接池化WebSocket合约监控器');
     this.isRunning = true;
     this.consecutiveErrors = 0;
     
     try {
       await this.createConnectionPools();
-      await this.distributeAndSubscribe();
+      const subscriptionResults = await this.distributeAndSubscribe();
+      
+      // 计算实际成功率
+      const totalSubscriptions = this.getTotalSubscriptions();
+      const actualSuccessRate = this.traders.length > 0 ? 
+        Math.round((totalSubscriptions / this.traders.length) * 100) : 0;
+      
+      // 🔥 如果成功率太低，启用降级模式
+      if (actualSuccessRate < 50) {
+        logger.warn(`🚨 连接池成功率太低 (${actualSuccessRate}%)，启用降级模式...`);
+        await this.enableFallbackMode();
+        return;
+      }
       
       logger.info('✅ 连接池化WebSocket合约监控器启动成功', {
         activeTraders: this.traders.length,
         activePools: this.connectionPools.size,
-        successRate: `${Math.round((this.connectionPools.size / this.POOL_SIZE) * 100)}%`
+        successfulSubscriptions: totalSubscriptions,
+        actualSuccessRate: `${actualSuccessRate}%`
       });
       
       this.startHealthMonitoring();
@@ -181,17 +214,22 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
         reject(new Error(`连接池${poolId}连接超时 (${timeoutMs/1000}秒)`));
       }, timeoutMs);
       
-      transport.ready()
-        .then(() => {
-          clearTimeout(timeout);
-          logger.info(`✅ 连接池${poolId}连接就绪`);
-          resolve();
-        })
-        .catch((error) => {
-          clearTimeout(timeout);
-          logger.error(`❌ 连接池${poolId}连接失败:`, error);
-          reject(error);
-        });
+      // 增加连接延迟，避免频率限制
+      const connectionDelay = poolId * 5000; // 每个连接池延迟5秒
+      
+      setTimeout(() => {
+        transport.ready()
+          .then(() => {
+            clearTimeout(timeout);
+            logger.info(`✅ 连接池${poolId}连接就绪`);
+            resolve();
+          })
+          .catch((error) => {
+            clearTimeout(timeout);
+            logger.error(`❌ 连接池${poolId}连接失败:`, error);
+            reject(error);
+          });
+      }, connectionDelay);
     });
   }
 
@@ -212,7 +250,7 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
   }
 
   private async distributeAndSubscribe(): Promise<void> {
-    logger.info('📋 分配交易员到连接池并订阅...');
+    logger.info('📋 分配交易员到连接池并序列化订阅...');
     
     // 将交易员平均分配到不同的连接池
     const pools = Array.from(this.connectionPools.keys());
@@ -227,44 +265,180 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
       }
     }
     
-    // 为每个连接池订阅所有分配的交易员
+    // 🔥 串行化连接池订阅，避免并发压力
+    let totalSuccessful = 0;
+    let totalFailed = 0;
+    
     for (const [poolId, pool] of this.connectionPools) {
       if (pool.traders.length === 0) continue;
       
-      logger.info(`📡 连接池${poolId} 开始订阅 ${pool.traders.length} 个交易员...`);
+      logger.info(`📡 连接池${poolId} 开始序列化订阅 ${pool.traders.length} 个交易员...`);
+      
+      // 每个连接池之间增加延迟，避免API限制
+      if (poolId > 0) {
+        const poolDelay = 10000; // 连接池间10秒延迟
+        logger.info(`⏳ 等待${poolDelay/1000}秒后启动连接池${poolId}订阅...`);
+        await new Promise(resolve => setTimeout(resolve, poolDelay));
+      }
+      
+      let successCount = 0;
+      let failCount = 0;
       
       for (const trader of pool.traders) {
-        try {
-          await this.subscribeTraderInPool(poolId, trader, pool);
-          
-          // 订阅间隔，避免API限制
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          
-        } catch (error) {
-          logger.error(`❌ 连接池${poolId} 订阅${trader.label}失败:`, error);
+        let subscribed = false;
+        let attempt = 0;
+        const maxAttempts = 3;
+        
+        while (!subscribed && attempt < maxAttempts) {
+          try {
+            attempt++;
+            logger.info(`📡 连接池${poolId} 订阅${trader.label} (尝试 ${attempt}/${maxAttempts})...`);
+            
+            await this.subscribeTraderInPool(poolId, trader, pool);
+            successCount++;
+            totalSuccessful++;
+            subscribed = true;
+            
+            // 订阅成功后延迟，避免API限制
+            await new Promise(resolve => setTimeout(resolve, 5000)); // 增加到5秒
+            
+          } catch (error) {
+            logger.error(`❌ 连接池${poolId} 订阅${trader.label}失败 (尝试 ${attempt}/${maxAttempts}):`, error);
+            
+            if (attempt < maxAttempts) {
+              // 重试前增加延迟
+              const retryDelay = 3000 * attempt;
+              logger.info(`⏳ ${retryDelay/1000}秒后重试订阅${trader.label}...`);
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+            } else {
+              failCount++;
+              totalFailed++;
+            }
+          }
         }
       }
       
-      logger.info(`✅ 连接池${poolId} 订阅完成`);
+      logger.info(`✅ 连接池${poolId} 订阅完成`, {
+        totalTraders: pool.traders.length,
+        successful: successCount,
+        failed: failCount,
+        successRate: `${Math.round((successCount / pool.traders.length) * 100)}%`
+      });
+    }
+    
+    // 修复：基于实际订阅成功数计算成功率
+    const totalAttempts = totalSuccessful + totalFailed;
+    const actualSuccessRate = totalAttempts > 0 ? Math.round((totalSuccessful / totalAttempts) * 100) : 0;
+    
+    logger.info(`📊 整体订阅完成`, {
+      totalTraders: this.traders.length,
+      totalSuccessful,
+      totalFailed,
+      actualSuccessRate: `${actualSuccessRate}%`,
+      activePools: this.connectionPools.size
+    });
+    
+    // 如果成功率太低，发出警告
+    if (actualSuccessRate < 50) {
+      logger.warn(`⚠️ 订阅成功率较低 (${actualSuccessRate}%)，可能存在网络或API限制问题`);
     }
   }
 
   private async subscribeTraderInPool(poolId: number, trader: ContractTrader, pool: any): Promise<void> {
     logger.info(`📡 连接池${poolId} 订阅${trader.label}...`);
     
-    const subscription = await pool.client.userEvents(
-      { user: trader.address as `0x${string}` },
-      (data: any) => {
-        this.handleUserEvent(data, trader, poolId);
+    try {
+      // 使用超时Promise包装订阅调用
+      const subscription = await this.subscribeWithTimeout(
+        pool.client,
+        trader,
+        poolId,
+        45000 // 增加到45秒超时，应对网络延迟
+      );
+      
+      pool.subscriptions.set(trader.address, subscription);
+      logger.info(`🎯 连接池${poolId} ${trader.label} 订阅成功`);
+      
+    } catch (error) {
+      logger.error(`❌ 连接池${poolId} 订阅${trader.label}失败:`, error);
+      throw error; // 重新抛出，让上层处理
+    }
+  }
+
+  private async subscribeWithTimeout(
+    client: any,
+    trader: ContractTrader,
+    poolId: number,
+    timeoutMs: number
+  ): Promise<any> {
+    return new Promise((resolve, reject) => {
+      // 设置超时
+      const timeout = setTimeout(() => {
+        reject(new Error(`连接池${poolId} 订阅${trader.label}超时 (${timeoutMs/1000}秒)`));
+      }, timeoutMs);
+      
+      logger.debug(`🔗 连接池${poolId} 调用${trader.label} userEvents...`, {
+        address: trader.address,
+        clientReady: client ? 'true' : 'false',
+        transportState: client?.transport?.readyState || 'unknown'
+      });
+      
+      // 🔥 添加连接状态检查
+      if (!client) {
+        clearTimeout(timeout);
+        reject(new Error(`连接池${poolId} client未定义`));
+        return;
       }
-    );
-    
-    pool.subscriptions.set(trader.address, subscription);
-    logger.info(`🎯 连接池${poolId} ${trader.label} 订阅成功`);
+      
+      if (!client.transport) {
+        clearTimeout(timeout);
+        reject(new Error(`连接池${poolId} transport未定义`));
+        return;
+      }
+      
+      // 检查transport状态
+      client.transport.ready()
+        .then(() => {
+          logger.debug(`🌐 连接池${poolId} transport就绪，开始订阅${trader.label}...`);
+          
+          // 调用实际的订阅方法
+          return client.userEvents(
+            { user: trader.address as `0x${string}` },
+            (data: any) => {
+              this.handleUserEvent(data, trader, poolId);
+            }
+          );
+        })
+        .then((subscription: any) => {
+          clearTimeout(timeout);
+          logger.debug(`📋 连接池${poolId} ${trader.label} userEvents Promise resolved`);
+          resolve(subscription);
+        })
+        .catch((error: any) => {
+          clearTimeout(timeout);
+          logger.error(`💥 连接池${poolId} ${trader.label} userEvents Promise rejected:`, {
+            error: error instanceof Error ? error.message : String(error),
+            errorType: error?.constructor?.name,
+            transportState: client.transport?.readyState || 'unknown'
+          });
+          reject(error);
+        });
+    });
   }
 
   private handleUserEvent(data: any, trader: ContractTrader, poolId: number): void {
     try {
+      // 🔥 重要：验证事件地址与订阅地址是否匹配
+      const actualUserAddress = this.extractUserAddressFromEvent(data);
+      if (actualUserAddress && actualUserAddress.toLowerCase() !== trader.address.toLowerCase()) {
+        logger.debug(`🔄 连接池${poolId} 跳过非匹配地址事件`, {
+          eventAddress: actualUserAddress,
+          subscribedAddress: trader.address,
+          traderLabel: trader.label
+        });
+        return; // 地址不匹配，跳过此事件
+      }
+      
       // 更新连接池健康状态
       const pool = this.connectionPools.get(poolId);
       if (pool) {
@@ -275,7 +449,8 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
       
       logger.debug(`📨 连接池${poolId} 收到${trader.label}事件`, {
         eventKeys: Object.keys(data || {}),
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        verifiedAddress: actualUserAddress
       });
 
       // 处理合约持仓变化事件
@@ -302,6 +477,27 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
     }
   }
 
+  // 从事件数据中提取用户地址
+  private extractUserAddressFromEvent(data: any): string | null {
+    // 检查不同类型的事件中的用户地址
+    if (data.fills && Array.isArray(data.fills) && data.fills.length > 0) {
+      // fills事件中可能包含用户地址信息
+      return data.fills[0].user || null;
+    }
+    
+    if (data.delta && data.delta.perpetualPosition) {
+      // perpetualPosition事件中的用户地址
+      return data.delta.perpetualPosition.user || null;
+    }
+    
+    // 其他事件类型的用户地址提取
+    if (data.user) {
+      return data.user;
+    }
+    
+    return null;
+  }
+
   private processDeltaEvent(data: any, trader: ContractTrader): void {
     const signal = this.convertToContractSignal(data, trader);
     if (signal) {
@@ -315,16 +511,157 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
     }
 
     for (const fill of data.fills) {
-      const signal = this.convertFillToContractSignal(fill, trader);
-      if (signal) {
-        logger.debug(`🎯 ${trader.label} 处理合约交易:`, {
-          asset: signal.asset,
-          size: signal.size,
-          side: signal.side,
-          eventType: signal.eventType
-        });
-        this.emit('contractEvent', signal, trader);
+      // 检查是否为合约交易（非现货）
+      const coin = fill.coin;
+      if (!coin || typeof coin !== 'string') {
+        continue;
       }
+
+      // 现货资产以@开头，跳过现货交易
+      if (coin.startsWith('@')) {
+        logger.debug(`⏭️ ${trader.label} 跳过现货交易: ${coin}`);
+        continue;
+      }
+
+      const size = parseFloat(fill.sz || '0');
+      const price = parseFloat(fill.px || '0');
+      const notionalValue = Math.abs(size) * price;
+
+      // 检查是否满足最小名义价值
+      if (notionalValue < this.minNotionalValue) {
+        logger.debug(`⏭️ ${trader.label} 交易金额过小: ${notionalValue} < ${this.minNotionalValue}`);
+        continue;
+      }
+
+      // 🔥 订单聚合处理 - 解决子订单重复警报
+      if (fill.oid) {
+        this.handleOrderAggregation(fill, trader);
+      } else {
+        // 没有oid的填充，直接处理（可能是旧格式或特殊情况）
+        this.processSingleFill(fill, trader);
+      }
+    }
+  }
+
+  // 处理订单聚合逻辑
+  private handleOrderAggregation(fill: any, trader: ContractTrader): void {
+    const oid = fill.oid;
+    const key = `${trader.address}-${oid}`;
+    
+    if (!this.pendingOrderFills.has(key)) {
+      // 新订单的第一个填充
+      this.pendingOrderFills.set(key, {
+        oid: oid,
+        trader: trader,
+        fills: [fill],
+        totalSize: Math.abs(parseFloat(fill.sz)),
+        avgPrice: parseFloat(fill.px),
+        firstFill: fill,
+        lastUpdate: Date.now()
+      });
+      
+      logger.debug(`📊 ${trader.label} 开始聚合订单 ${oid}`, {
+        coin: fill.coin,
+        initialSize: fill.sz,
+        price: fill.px
+      });
+    } else {
+      // 订单的后续填充
+      const pending = this.pendingOrderFills.get(key)!;
+      pending.fills.push(fill);
+      
+      // 计算加权平均价格
+      const newSize = Math.abs(parseFloat(fill.sz));
+      const newPrice = parseFloat(fill.px);
+      pending.avgPrice = (pending.avgPrice * pending.totalSize + newPrice * newSize) / (pending.totalSize + newSize);
+      pending.totalSize += newSize;
+      pending.lastUpdate = Date.now();
+      
+      logger.debug(`📈 ${trader.label} 订单 ${oid} 新增填充`, {
+        coin: fill.coin,
+        fillSize: fill.sz,
+        totalSize: pending.totalSize,
+        avgPrice: pending.avgPrice,
+        fillsCount: pending.fills.length
+      });
+    }
+    
+    // 设置订单完成检查
+    setTimeout(() => {
+      this.checkCompletedOrder(key, trader);
+    }, this.ORDER_COMPLETION_DELAY);
+  }
+
+  // 检查订单是否完成
+  private checkCompletedOrder(key: string, trader: ContractTrader): void {
+    const pending = this.pendingOrderFills.get(key);
+    if (!pending) return;
+    
+    const now = Date.now();
+    if (now - pending.lastUpdate >= this.ORDER_COMPLETION_DELAY) {
+      // 订单完成！发送聚合后的警报
+      logger.info(`✅ ${trader.label} 订单 ${pending.oid} 完成聚合`, {
+        totalFills: pending.fills.length,
+        totalSize: pending.totalSize,
+        avgPrice: pending.avgPrice,
+        coin: pending.firstFill.coin
+      });
+      
+      this.emitAggregatedOrder(pending);
+      this.pendingOrderFills.delete(key);
+    }
+  }
+
+  // 发送聚合后的订单事件
+  private emitAggregatedOrder(aggregatedOrder: any): void {
+    const fill = aggregatedOrder.firstFill;
+    const trader = aggregatedOrder.trader;
+    
+    // 使用聚合后的数据创建事件
+    const aggregatedFill = {
+      ...fill,
+      sz: aggregatedOrder.totalSize.toString(),
+      px: aggregatedOrder.avgPrice.toString(),
+      // 标记为聚合订单
+      isAggregated: true,
+      originalFillsCount: aggregatedOrder.fills.length,
+      aggregatedSize: aggregatedOrder.totalSize,
+      aggregatedPrice: aggregatedOrder.avgPrice
+    };
+    
+    const signal = this.convertFillToContractSignal(aggregatedFill, trader);
+    if (signal) {
+      // 添加聚合信息到metadata
+      signal.metadata = {
+        ...signal.metadata,
+        isAggregated: true,
+        originalFillsCount: aggregatedOrder.fills.length,
+        aggregationTimespan: Date.now() - aggregatedOrder.fills[0].time
+      };
+      
+      logger.debug(`🎯 ${trader.label} 发送聚合订单警报:`, {
+        asset: signal.asset,
+        size: signal.size,
+        side: signal.side,
+        eventType: signal.eventType,
+        fillsCount: aggregatedOrder.fills.length
+      });
+      
+      this.emit('contractEvent', signal, trader);
+    }
+  }
+
+  // 处理单个填充（无oid或特殊情况）
+  private processSingleFill(fill: any, trader: ContractTrader): void {
+    const signal = this.convertFillToContractSignal(fill, trader);
+    if (signal) {
+      logger.debug(`🎯 ${trader.label} 处理单个合约交易:`, {
+        asset: signal.asset,
+        size: signal.size,
+        side: signal.side,
+        eventType: signal.eventType
+      });
+      this.emit('contractEvent', signal, trader);
     }
   }
 
@@ -475,6 +812,9 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
   }
 
   createWebhookAlert(event: ContractEvent, trader: ContractTrader): ContractWebhookAlert {
+    const isAggregated = event.metadata?.isAggregated || false;
+    const originalFillsCount = event.metadata?.originalFillsCount || 1;
+    
     return {
       timestamp: event.timestamp,
       alertType: event.eventType as any,
@@ -489,9 +829,9 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
       positionSizeAfter: event.positionSizeAfter,
       notionalValue: event.metadata?.notionalValue,
       leverage: event.metadata?.leverage,
-      mergedCount: 1,
-      originalFillsCount: 1,
-      isMerged: false
+      mergedCount: originalFillsCount,
+      originalFillsCount: originalFillsCount,
+      isMerged: isAggregated
     };
   }
 
@@ -512,7 +852,8 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
         consecutiveErrors: this.consecutiveErrors,
         avgReconnectsPerPool: healthStats.avgReconnects,
         healthyPools: healthStats.healthyPools,
-        totalSubscriptions: healthStats.totalSubscriptions
+        totalSubscriptions: healthStats.totalSubscriptions,
+        pendingOrders: this.pendingOrderFills.size // 新增：显示待聚合订单数
       });
       
       // 检查和修复不健康的连接池
@@ -553,24 +894,136 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
 
   private performPoolHealthCheck(): void {
     const now = Date.now();
-    const staleThreshold = 300000; // 5分钟没有消息认为连接有问题
+    const staleThreshold = 180000; // 3分钟没有消息认为连接有问题
+    const criticalThreshold = 300000; // 5分钟认为严重问题，需要重连
     
     for (const [poolId, pool] of this.connectionPools) {
-      const isStale = (now - pool.health.lastSuccessfulMessage) > staleThreshold;
+      const timeSinceLastMessage = now - pool.health.lastSuccessfulMessage;
+      const isStale = timeSinceLastMessage > staleThreshold;
+      const isCritical = timeSinceLastMessage > criticalThreshold;
       const hasHighFailures = pool.health.consecutiveFailures > 8;
       
-      if (isStale || hasHighFailures) {
+      if (isCritical || hasHighFailures) {
+        logger.error(`🚨 连接池${poolId} 严重异常，启动重连`, {
+          timeSinceLastMessage: Math.floor(timeSinceLastMessage / 1000) + 's',
+          consecutiveFailures: pool.health.consecutiveFailures,
+          isCritical,
+          hasHighFailures,
+          tradersCount: pool.traders.length
+        });
+        
+        // 🔥 主动重连异常的连接池
+        this.reconnectPool(poolId, pool).catch(error => {
+          logger.error(`❌ 连接池${poolId} 重连失败:`, error);
+        });
+        
+      } else if (isStale) {
         logger.warn(`🔍 连接池${poolId} 健康检查异常`, {
           isStale,
           hasHighFailures,
           lastMessage: new Date(pool.health.lastSuccessfulMessage).toISOString(),
           consecutiveFailures: pool.health.consecutiveFailures,
-          staleDuration: Math.floor((now - pool.health.lastSuccessfulMessage) / 1000) + 's',
+          staleDuration: Math.floor(timeSinceLastMessage / 1000) + 's',
           tradersCount: pool.traders.length
         });
         
-        // 标记为不活跃，等待自动重连
+        // 标记为不活跃，但还不到重连阈值
         pool.health.isActive = false;
+      }
+    }
+  }
+
+  // 🔥 新增：连接池重连机制
+  private async reconnectPool(poolId: number, oldPool: any): Promise<void> {
+    try {
+      logger.info(`🔄 开始重连连接池${poolId}...`);
+      
+      // 清理旧连接
+      try {
+        for (const [address, subscription] of oldPool.subscriptions) {
+          if (subscription?.unsubscribe) {
+            await subscription.unsubscribe();
+          }
+        }
+        if (oldPool.transport) {
+          await oldPool.transport.close();
+        }
+      } catch (error) {
+        logger.debug(`清理连接池${poolId}旧连接时出错:`, error);
+      }
+      
+      // 创建新的连接和客户端
+      const transport = new hl.WebSocketTransport({
+        url: config.hyperliquid.wsUrl,
+        timeout: 45000,
+        keepAlive: { 
+          interval: 25000,
+          timeout: 15000
+        },
+        reconnect: {
+          maxRetries: 30,
+          connectionTimeout: 45000,
+          connectionDelay: (attempt: number) => Math.min(2000 * Math.pow(2, attempt - 1), 32000),
+          shouldReconnect: (error: any) => {
+            const errorMessage = error?.message?.toLowerCase() || '';
+            if (errorMessage.includes('unauthorized') || errorMessage.includes('forbidden')) {
+              logger.error(`连接池${poolId} 认证错误，停止重连`, { error: errorMessage });
+              return false;
+            }
+            return true;
+          }
+        },
+        autoResubscribe: true,
+      });
+
+      const client = new hl.SubscriptionClient({ transport });
+      
+      // 等待连接就绪
+      await this.waitForConnection(transport, poolId, 30000);
+      
+      // 更新连接池
+      const newPool = {
+        transport,
+        client,
+        traders: oldPool.traders, // 保持原有的交易员分配
+        subscriptions: new Map(),
+        health: {
+          lastPingTime: Date.now(),
+          consecutiveFailures: 0,
+          totalReconnects: oldPool.health.totalReconnects + 1,
+          lastSuccessfulMessage: Date.now(),
+          isActive: true
+        }
+      };
+      
+      this.connectionPools.set(poolId, newPool);
+      
+      // 重新订阅所有交易员
+      logger.info(`🔄 连接池${poolId} 重新订阅 ${newPool.traders.length} 个交易员...`);
+      
+      for (const trader of newPool.traders) {
+        try {
+          await this.subscribeTraderInPool(poolId, trader, newPool);
+          await new Promise(resolve => setTimeout(resolve, 5000)); // 增加订阅间隔到5秒
+        } catch (error) {
+          logger.error(`❌ 连接池${poolId} 重连订阅${trader.label}失败:`, error);
+        }
+      }
+      
+      logger.info(`✅ 连接池${poolId} 重连完成`, {
+        tradersCount: newPool.traders.length,
+        subscriptionsCount: newPool.subscriptions.size,
+        totalReconnects: newPool.health.totalReconnects
+      });
+      
+    } catch (error) {
+      logger.error(`💥 连接池${poolId} 重连过程失败:`, error);
+      
+      // 重连失败，标记连接池为失效
+      const pool = this.connectionPools.get(poolId);
+      if (pool) {
+        pool.health.isActive = false;
+        pool.health.consecutiveFailures++;
       }
     }
   }
@@ -582,6 +1035,10 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
 
     logger.info('⏹️ 停止连接池化WebSocket合约监控器');
     this.isRunning = false;
+    
+    // 清理pending订单
+    logger.info(`🧹 清理 ${this.pendingOrderFills.size} 个待聚合订单`);
+    this.pendingOrderFills.clear();
     
     for (const [poolId, pool] of this.connectionPools) {
       try {
@@ -605,6 +1062,148 @@ export class PooledWebSocketContractMonitor extends EventEmitter {
     
     this.connectionPools.clear();
     logger.info('✅ 连接池化WebSocket合约监控器已停止');
+  }
+
+  // 强制清理所有连接池（用于重启时的彻底清理）
+  private async forceCleanupPools(): Promise<void> {
+    logger.info('🧹 强制清理所有连接池...');
+    
+    for (const [poolId, pool] of this.connectionPools) {
+      try {
+        // 强制取消所有订阅
+        for (const [address, subscription] of pool.subscriptions) {
+          try {
+            if (subscription?.unsubscribe) {
+              await Promise.race([
+                subscription.unsubscribe(),
+                new Promise((_, reject) => 
+                  setTimeout(() => reject(new Error('取消订阅超时')), 5000)
+                )
+              ]);
+            }
+          } catch (error) {
+            logger.debug(`强制取消订阅失败 ${address}:`, error);
+          }
+        }
+        
+        // 强制关闭连接
+        try {
+          if (pool.transport) {
+            await Promise.race([
+              pool.transport.close(),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('关闭连接超时')), 3000)
+              )
+            ]);
+          }
+        } catch (error) {
+          logger.debug(`强制关闭连接失败 池${poolId}:`, error);
+        }
+        
+        logger.debug(`清理连接池${poolId}完成`);
+      } catch (error) {
+        logger.warn(`强制清理连接池${poolId}失败:`, error);
+      }
+    }
+    
+    this.connectionPools.clear();
+    logger.info('✅ 强制清理完成');
+  }
+
+  // 🔥 降级模式：使用单个连接订阅所有交易员
+  private async enableFallbackMode(): Promise<void> {
+    logger.info('🛡️ 启用连接池降级模式 - 使用单连接...');
+    
+    try {
+      // 清理失败的连接池
+      await this.stop();
+      
+      // 创建单个可靠连接
+      const transport = new hl.WebSocketTransport({
+        url: config.hyperliquid.wsUrl,
+        timeout: 60000, // 增加到60秒超时
+        keepAlive: { 
+          interval: 30000,
+          timeout: 20000
+        },
+        reconnect: {
+          maxRetries: 50,
+          connectionTimeout: 60000,
+          connectionDelay: (attempt: number) => Math.min(3000 * attempt, 30000),
+          shouldReconnect: () => true
+        },
+        autoResubscribe: true,
+      });
+
+      const client = new hl.SubscriptionClient({ transport });
+      
+      // 等待连接就绪
+      await this.waitForConnection(transport, 99, 45000);
+      
+      // 创建降级连接池
+      const fallbackPool = {
+        transport,
+        client,
+        traders: [...this.traders],
+        subscriptions: new Map(),
+        health: {
+          lastPingTime: Date.now(),
+          consecutiveFailures: 0,
+          totalReconnects: 0,
+          lastSuccessfulMessage: Date.now(),
+          isActive: true
+        }
+      };
+      
+      this.connectionPools.clear();
+      this.connectionPools.set(99, fallbackPool); // 特殊ID 99表示降级模式
+      
+      // 逐个订阅交易员，增加延迟
+      let successCount = 0;
+      for (const trader of this.traders) {
+        try {
+          logger.info(`📡 降级模式订阅${trader.label}...`);
+          
+          const subscription = await client.userEvents(
+            { user: trader.address as `0x${string}` },
+            (data: any) => this.handleUserEvent(data, trader, 99)
+          );
+          
+          fallbackPool.subscriptions.set(trader.address, subscription);
+          successCount++;
+          
+          logger.info(`✅ 降级模式${trader.label}订阅成功`);
+          
+          // 降级模式使用更长延迟确保稳定
+          await new Promise(resolve => setTimeout(resolve, 8000));
+          
+        } catch (error) {
+          logger.error(`❌ 降级模式${trader.label}订阅失败:`, error);
+        }
+      }
+      
+      logger.info('✅ 降级模式启动完成', {
+        mode: 'fallback-single-connection',
+        totalTraders: this.traders.length,
+        successfulSubscriptions: successCount,
+        successRate: `${Math.round((successCount / this.traders.length) * 100)}%`
+      });
+      
+      this.startHealthMonitoring();
+      
+    } catch (error) {
+      logger.error('💥 降级模式启动失败:', error);
+      throw error;
+    }
+  }
+
+  // 获取所有连接池的总订阅数
+  private getTotalSubscriptions(): number {
+    let total = 0;
+    for (const [poolId, pool] of this.connectionPools) {
+      total += pool.subscriptions.size;
+    }
+    return total;
   }
 
   getStats() {

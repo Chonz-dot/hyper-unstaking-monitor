@@ -2,6 +2,7 @@ import HyperliquidMonitor from './services/hyperliquid-monitor';
 import BatchedHyperliquidMonitor from './services/hyperliquid-monitor';
 import { WebSocketContractMonitor } from './services/webSocketContractMonitor';
 import PooledWebSocketContractMonitor from './services/pooledWebSocketContractMonitor';
+import RobustWebSocketContractMonitor from './services/robustWebSocketContractMonitor';
 import AlertEngine from './engine/alert-engine';
 import CacheManager from './cache';
 import WebhookNotifier from './webhook';
@@ -14,7 +15,7 @@ export const SYSTEM_START_TIME = Date.now();
 
 class HypeUnstakingMonitor {
   private hyperliquidMonitor: BatchedHyperliquidMonitor;
-  private contractMonitor?: WebSocketContractMonitor | PooledWebSocketContractMonitor;
+  private contractMonitor?: WebSocketContractMonitor | PooledWebSocketContractMonitor | RobustWebSocketContractMonitor;
   private alertEngine: AlertEngine;
   private cache: CacheManager;
   private notifier: WebhookNotifier;
@@ -32,32 +33,49 @@ class HypeUnstakingMonitor {
     logger.info('🔧 检查合约监控配置', {
       enabled: config.contractMonitoring.enabled,
       tradersCount: config.contractMonitoring.traders.length,
+      monitorType: config.contractMonitoring.monitorType,
       envEnabled: process.env.CONTRACT_MONITORING_ENABLED,
-      envContractEnabled: process.env.CONTRACT_MONITORING_ENABLED === 'true',
       tradersList: config.contractMonitoring.traders.map(t => ({ label: t.label, isActive: t.isActive }))
     });
 
     if (config.contractMonitoring.enabled) {
-      // 根据环境变量选择监控器类型
-      const usePooledMonitor = process.env.USE_POOLED_MONITOR === 'true';
+      // 根据配置文件选择监控器类型
+      const monitorType = config.contractMonitoring.monitorType || 'robust';
       
-      if (usePooledMonitor) {
-        logger.info('✅ 合约监控已启用，使用连接池化WebSocket监控器...');
-        this.contractMonitor = new PooledWebSocketContractMonitor(
-          config.contractMonitoring.traders,
-          config.contractMonitoring.minNotionalValue
-        );
-      } else {
-        logger.info('✅ 合约监控已启用，使用独立WebSocket监控器...');
-        this.contractMonitor = new WebSocketContractMonitor(
-          config.contractMonitoring.traders,
-          config.contractMonitoring.minNotionalValue
-        );
+      logger.info(`✅ 合约监控已启用，使用${monitorType}监控器...`, {
+        envValue: process.env.CONTRACT_MONITOR_TYPE,
+        configValue: config.contractMonitoring.monitorType,
+        actualMonitorType: monitorType,
+        selectedMonitor: monitorType === 'pooled' ? 'PooledWebSocketContractMonitor' : 
+                        monitorType === 'robust' ? 'RobustWebSocketContractMonitor' : 
+                        'WebSocketContractMonitor'
+      });
+      
+      switch (monitorType) {
+        case 'pooled':
+          this.contractMonitor = new PooledWebSocketContractMonitor(
+            config.contractMonitoring.traders,
+            config.contractMonitoring.minNotionalValue
+          );
+          break;
+        case 'robust':
+          this.contractMonitor = new RobustWebSocketContractMonitor(
+            config.contractMonitoring.traders,
+            config.contractMonitoring.minNotionalValue
+          );
+          break;
+        case 'single':
+        default:
+          this.contractMonitor = new WebSocketContractMonitor(
+            config.contractMonitoring.traders,
+            config.contractMonitoring.minNotionalValue
+          );
+          break;
       }
 
       // 监听合约事件
       this.contractMonitor.on('contractEvent', this.handleContractEvent.bind(this));
-      logger.info('🎯 WebSocket合约监控器初始化完成');
+      logger.info('🎯 WebSocket合约监控器初始化完成', { type: monitorType });
     } else {
       logger.warn('❌ 合约监控未启用，请检查 CONTRACT_MONITORING_ENABLED 环境变量');
       logger.warn('当前环境变量值:', {
@@ -105,7 +123,15 @@ class HypeUnstakingMonitor {
       if (this.contractMonitor) {
         try {
           logger.info('开始启动WebSocket合约监控器...');
-          await this.contractMonitor.start();
+          
+          // 添加超时机制，防止启动卡住
+          await Promise.race([
+            this.contractMonitor.start(),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('合约监控器启动超时')), 60000) // 60秒超时
+            )
+          ]);
+          
           logger.info('✅ WebSocket合约监控启动完成', this.contractMonitor.getStats());
         } catch (error) {
           logger.error('WebSocket合约监控启动失败:', error);
