@@ -16,6 +16,7 @@ export class PureRpcContractMonitor extends EventEmitter {
     private minNotionalValue: number;
     private isRunning = false;
     private startTime: number;
+    private systemStartTime: number; // 系统启动时间
     private infoClient: hl.InfoClient;
     private pollingIntervals: NodeJS.Timeout[] = [];
     
@@ -64,6 +65,7 @@ export class PureRpcContractMonitor extends EventEmitter {
         this.traders = traders.filter(t => t.isActive);
         this.minNotionalValue = minNotionalValue; // 默认1美元阈值
         this.startTime = Date.now();
+        this.systemStartTime = Date.now(); // 记录系统启动时间
         
         // 只使用官方API
         const transport = new hl.HttpTransport({
@@ -78,25 +80,26 @@ export class PureRpcContractMonitor extends EventEmitter {
         this.analysisEngine = new PositionAnalysisEngine(this.positionManager);
         this.alertSystem = new EnhancedAlertSystem(this.analysisEngine);
         
-        // 初始化时间：从1小时前开始，更保守
-        const oneHourAgo = Date.now() - 60 * 60 * 1000;
+        // 初始化时间：从系统启动时间开始，避免历史订单污染
         this.traders.forEach(trader => {
-            this.lastProcessedTime.set(trader.address, oneHourAgo);
+            this.lastProcessedTime.set(trader.address, this.systemStartTime);
         });
 
-        logger.info('🔄 初始化纯净RPC合约监控器 (增强版 v2.0)', {
+        logger.info('🔄 初始化纯净RPC合约监控器 (增强版 v2.1)', {
             activeTraders: this.traders.length,
             minNotionalValue,
             strategy: '官方API + 智能交易分类 + 持仓分析',
             pollingInterval: `${this.POLLING_INTERVAL / 1000}s`,
             orderCompletionDelay: `${this.ORDER_COMPLETION_DELAY / 1000}s`,
-            initialTimeRange: '1小时前开始',
+            systemStartTime: new Date(this.systemStartTime).toISOString(),
+            historicalFilterEnabled: true, // 启用历史订单过滤
             enhancedFeatures: [
                 '持仓状态管理', 
                 '智能交易分类', 
                 '多维度持仓分析',
                 '增强告警系统',
-                '风险评估引擎'
+                '风险评估引擎',
+                '历史订单过滤' // 新增功能
             ]
         });
     }
@@ -292,18 +295,26 @@ export class PureRpcContractMonitor extends EventEmitter {
                     }
                 });
 
+                // 🔍 关键修复：过滤历史订单
+                const recentFills = this.filterHistoricalOrders(fills);
+                
+                if (recentFills.length === 0) {
+                    logger.debug(`📋 ${trader.label} 过滤后无新交易`);
+                    return;
+                }
+
                 // 按时间排序，确保按顺序处理
-                fills.sort((a, b) => a.time - b.time);
+                recentFills.sort((a, b) => a.time - b.time);
 
                 // 检测新订单并查询完整信息
-                const newOrders = await this.detectAndFetchCompleteOrders(fills, trader);
+                const newOrders = await this.detectAndFetchCompleteOrders(recentFills, trader);
                 
                 // 处理聚合后的订单（包括新检测到的完整订单）
                 for (const aggregatedOrder of newOrders) {
                     await this.processAggregatedOrder(aggregatedOrder, trader);
                 }
 
-                this.stats.tradesProcessed += fills.length;
+                this.stats.tradesProcessed += recentFills.length; // 使用过滤后的数量
                 this.stats.totalAggregatedOrders += newOrders.length;
             } else {
                 logger.debug(`💤 ${trader.label} 当前时间范围内无交易`);
@@ -361,6 +372,38 @@ export class PureRpcContractMonitor extends EventEmitter {
         } catch (error) {
             logger.error(`处理${trader.label}填充失败:`, error, { fill });
         }
+    }
+
+    /**
+     * 过滤历史订单，只处理系统启动后的交易
+     */
+    private filterHistoricalOrders(fills: any[]): any[] {
+        const filteredFills = fills.filter(fill => {
+            const fillTime = fill.time; // 已经是毫秒时间戳
+            const isAfterStart = fillTime >= this.systemStartTime;
+            
+            if (!isAfterStart) {
+                logger.debug(`⏭️ 跳过历史订单`, {
+                    fillTime: new Date(fillTime).toISOString(),
+                    systemStart: new Date(this.systemStartTime).toISOString(),
+                    coin: fill.coin,
+                    oid: fill.oid
+                });
+            }
+            
+            return isAfterStart;
+        });
+        
+        if (filteredFills.length < fills.length) {
+            logger.info(`🔍 历史订单过滤`, {
+                totalFills: fills.length,
+                filteredFills: filteredFills.length,
+                skippedHistorical: fills.length - filteredFills.length,
+                systemStartTime: new Date(this.systemStartTime).toISOString()
+            });
+        }
+        
+        return filteredFills;
     }
 
     /**
