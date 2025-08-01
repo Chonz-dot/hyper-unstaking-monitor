@@ -43,7 +43,7 @@ export interface MonitorEvent {
 export interface ContractEvent {
   timestamp: number;
   address: string;
-  eventType: 'position_open_long' | 'position_open_short' | 'position_close' | 'position_increase' | 'position_decrease';
+  eventType: 'position_open_long' | 'position_open_short' | 'position_close' | 'position_increase' | 'position_decrease' | 'position_reverse' | 'no_change' | 'unknown';
   asset: string;
   size: string;
   price: string;

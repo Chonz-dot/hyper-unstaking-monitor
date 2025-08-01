@@ -2,6 +2,8 @@ import { EventEmitter } from 'events';
 import { ContractTrader, ContractEvent, ContractWebhookAlert } from '../types';
 import logger from '../logger';
 import * as hl from '@nktkas/hyperliquid';
+import { PositionStateManager } from '../managers/PositionStateManager';
+import { TradeClassificationEngine, EnhancedContractEvent } from '../managers/TradeClassificationEngine';
 
 /**
  * 纯净RPC合约监控器 
@@ -14,6 +16,10 @@ export class PureRpcContractMonitor extends EventEmitter {
     private startTime: number;
     private infoClient: hl.InfoClient;
     private pollingIntervals: NodeJS.Timeout[] = [];
+    
+    // 增强功能组件
+    private positionManager: PositionStateManager;
+    private classificationEngine: TradeClassificationEngine;
     
     // 轮询配置 - 平衡性能和API限制
     private readonly POLLING_INTERVAL = 15000; // 15秒轮询间隔，减少API压力
@@ -62,19 +68,24 @@ export class PureRpcContractMonitor extends EventEmitter {
         });
         this.infoClient = new hl.InfoClient({ transport });
         
+        // 初始化增强功能组件
+        this.positionManager = new PositionStateManager(this.infoClient);
+        this.classificationEngine = new TradeClassificationEngine(this.positionManager);
+        
         // 初始化时间：从1小时前开始，更保守
         const oneHourAgo = Date.now() - 60 * 60 * 1000;
         this.traders.forEach(trader => {
             this.lastProcessedTime.set(trader.address, oneHourAgo);
         });
 
-        logger.info('🔄 初始化纯净RPC合约监控器', {
+        logger.info('🔄 初始化纯净RPC合约监控器 (增强版)', {
             activeTraders: this.traders.length,
             minNotionalValue,
-            strategy: '纯官方API + 快速轮询',
+            strategy: '官方API + 智能交易分类',
             pollingInterval: `${this.POLLING_INTERVAL / 1000}s`,
             orderCompletionDelay: `${this.ORDER_COMPLETION_DELAY / 1000}s`,
-            initialTimeRange: '1小时前开始'
+            initialTimeRange: '1小时前开始',
+            enhancedFeatures: ['持仓状态管理', '智能交易分类', '增强事件分析']
         });
     }
 
@@ -148,10 +159,11 @@ export class PureRpcContractMonitor extends EventEmitter {
             // 启动健康监控
             this.startHealthMonitoring();
 
-            logger.info('✅ 纯净RPC合约监控器启动成功', {
+            logger.info('✅ 纯净RPC合约监控器启动成功 (增强版)', {
                 activeTraders: this.traders.length,
-                strategy: 'pure-official-api-polling',
-                pollingInterval: `${this.POLLING_INTERVAL / 1000}s`
+                strategy: 'pure-official-api-polling + enhanced-classification',
+                pollingInterval: `${this.POLLING_INTERVAL / 1000}s`,
+                enhancedFeatures: 'enabled'
             });
 
         } catch (error) {
@@ -440,7 +452,7 @@ export class PureRpcContractMonitor extends EventEmitter {
     }
 
     /**
-     * 处理聚合后的订单
+     * 处理聚合后的订单 (增强版)
      */
     private async processAggregatedOrder(aggregatedOrder: any, trader: ContractTrader): Promise<void> {
         try {
@@ -455,21 +467,38 @@ export class PureRpcContractMonitor extends EventEmitter {
                 return;
             }
 
-            logger.info(`🎯 ${trader.label} 挂单成交${aggregatedOrder.isAggregated ? '(聚合)' : ''}`, {
+            logger.info(`🎯 ${trader.label} 检测到交易${aggregatedOrder.isAggregated ? '(聚合)' : ''}`, {
                 coin: coin,
                 side: aggregatedOrder.side,
                 size: size,
                 price: `$${price}`,
                 notional: `$${notionalValue.toFixed(2)}`,
                 aggregatedFills: aggregatedOrder.aggregatedFills,
-                oid: aggregatedOrder.oid,
-                crossed: aggregatedOrder.crossed
+                oid: aggregatedOrder.oid
             });
 
-            // 转换为合约信号并发送事件
-            const event = this.convertFillToContractSignal(aggregatedOrder, trader);
-            if (event) {
-                this.emit('contractEvent', event, trader);
+            // 使用增强分类引擎处理交易
+            const enhancedEvent = await this.classificationEngine.classifyTrade(
+                aggregatedOrder, 
+                trader,
+                8000,  // 8秒初始延迟等待交易结算
+                2      // 最多重试2次
+            );
+
+            if (enhancedEvent) {
+                logger.info(`🏷️ ${trader.label} 交易分类完成`, {
+                    asset: enhancedEvent.asset,
+                    type: enhancedEvent.classification.type,
+                    description: enhancedEvent.classification.description,
+                    confidence: enhancedEvent.classification.confidence,
+                    positionChange: enhancedEvent.positionChange
+                });
+
+                // 发射增强的事件
+                this.emit('contractEvent', enhancedEvent, trader);
+                this.stats.totalEvents++;
+            } else {
+                logger.warn(`⚠️ ${trader.label} 交易分类失败，跳过事件`);
             }
 
         } catch (error) {
@@ -741,6 +770,10 @@ export class PureRpcContractMonitor extends EventEmitter {
         return true;
     }
 
+    /**
+     * @deprecated 使用 TradeClassificationEngine.classifyTrade 替代
+     * 将填充转换为合约信号 (保留用于后备场景)
+     */
     private convertFillToContractSignal(fill: any, trader: ContractTrader): ContractEvent | null {
         try {
             const coin = fill.coin;
@@ -827,7 +860,7 @@ export class PureRpcContractMonitor extends EventEmitter {
             const timeSinceLastPoll = Date.now() - this.stats.lastSuccessfulPoll;
             const isHealthy = timeSinceLastPoll < this.POLLING_INTERVAL * 2;
 
-            logger.info('📊 纯净RPC合约监控状态报告', {
+            logger.info('📊 纯净RPC合约监控状态报告 (增强版)', {
                 uptime: Math.floor((Date.now() - this.startTime) / 1000) + 's',
                 isHealthy,
                 totalTraders: this.traders.length,
@@ -838,7 +871,11 @@ export class PureRpcContractMonitor extends EventEmitter {
                 consecutiveErrors: this.stats.consecutiveErrors,
                 lastSuccessfulPoll: Math.floor(timeSinceLastPoll / 1000) + 's ago',
                 successRate: this.stats.totalRequests > 0 ? 
-                    Math.round(((this.stats.totalRequests - this.stats.totalErrors) / this.stats.totalRequests) * 100) + '%' : 'N/A'
+                    Math.round(((this.stats.totalRequests - this.stats.totalErrors) / this.stats.totalRequests) * 100) + '%' : 'N/A',
+                
+                // 增强功能统计
+                positionManager: this.positionManager.getStats(),
+                classificationEngine: this.classificationEngine.getStats()
             });
 
         }, 60000); // 每分钟报告一次状态
@@ -871,14 +908,20 @@ export class PureRpcContractMonitor extends EventEmitter {
     getStats() {
         return {
             isRunning: this.isRunning,
-            strategy: 'pure-rpc-official-api',
+            strategy: 'pure-rpc-official-api-enhanced',
             traders: this.traders.length,
             startTime: this.startTime,
             uptime: this.isRunning ? Date.now() - this.startTime : 0,
             pollingInterval: this.POLLING_INTERVAL,
             stats: this.stats,
             successRate: this.stats.totalRequests > 0 ? 
-                Math.round(((this.stats.totalRequests - this.stats.totalErrors) / this.stats.totalRequests) * 100) : 0
+                Math.round(((this.stats.totalRequests - this.stats.totalErrors) / this.stats.totalRequests) * 100) : 0,
+            
+            // 增强功能统计
+            enhancedFeatures: {
+                positionManager: this.positionManager.getStats(),
+                classificationEngine: this.classificationEngine.getStats()
+            }
         };
     }
 
@@ -887,7 +930,7 @@ export class PureRpcContractMonitor extends EventEmitter {
 
         return {
             isRunning: this.isRunning,
-            monitoringMode: 'pure-rpc',
+            monitoringMode: 'pure-rpc-enhanced',
             isHealthy: timeSinceLastPoll < this.POLLING_INTERVAL * 2,
             totalTraders: this.traders.length,
             pollingInterval: this.POLLING_INTERVAL,
@@ -898,7 +941,15 @@ export class PureRpcContractMonitor extends EventEmitter {
                 label: trader.label,
                 address: trader.address.slice(0, 8) + '...',
                 lastProcessed: this.lastProcessedTime.get(trader.address) || 0
-            }))
+            })),
+            
+            // 增强功能状态
+            enhancedFeatures: {
+                positionManagerEnabled: true,
+                classificationEngineEnabled: true,
+                positionCacheSize: this.positionManager.getStats().cacheSize,
+                classificationSuccessRate: this.classificationEngine.getStats().successRate + '%'
+            }
         };
     }
 
