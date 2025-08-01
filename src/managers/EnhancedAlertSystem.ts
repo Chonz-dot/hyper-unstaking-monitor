@@ -117,6 +117,9 @@ export class EnhancedAlertSystem {
     ): EnhancedWebhookAlert {
         this.stats.basicAlerts++;
 
+        // 生成更具体的操作描述
+        const operationDescription = this.generateOperationDescription(event);
+
         const alert: EnhancedWebhookAlert = {
             timestamp: event.timestamp,
             alertType: this.mapEventTypeToAlertType(event.eventType),
@@ -134,7 +137,10 @@ export class EnhancedAlertSystem {
             classification: event.classification,
             positionChange: event.positionChange,
             enhanced: false,
-            alertLevel: 'basic'
+            alertLevel: 'basic',
+            
+            // 添加操作描述到formattedMessage中
+            formattedMessage: this.formatBasicMessage(event, trader, operationDescription)
         };
 
         return alert;
@@ -270,17 +276,17 @@ export class EnhancedAlertSystem {
             return false;
         }
 
-        // 检查是否是开仓操作 - 更宽松的判断
-        const isOpeningOperation = event.eventType.includes('open') ||
-            event.eventType.includes('increase') ||
-            (event.classification && (
-                event.classification.type.includes('OPEN') ||
-                event.classification.type.includes('INCREASE')
-            ));
+        // 所有有意义的持仓变化都应该进行分析
+        const isMeaningfulOperation = event.eventType !== 'no_change' && 
+                                    event.eventType !== 'unknown' &&
+                                    (event.classification && 
+                                     event.classification.type !== 'NO_CHANGE' && 
+                                     event.classification.type !== 'UNKNOWN' &&
+                                     event.classification.type !== 'FALLBACK');
 
-        if (!isOpeningOperation) {
+        if (!isMeaningfulOperation) {
             this.stats.analysisSkipped++;
-            logger.debug(`🔄 非开仓操作，跳过分析`, {
+            logger.debug(`🔄 非有意义操作，跳过分析`, {
                 trader: trader.label,
                 eventType: event.eventType,
                 classificationType: event.classification?.type || 'unknown'
@@ -378,6 +384,70 @@ export class EnhancedAlertSystem {
                 : 0,
             config: this.config
         };
+    }
+
+    /**
+     * 生成操作描述
+     */
+    private generateOperationDescription(event: EnhancedContractEvent): string {
+        if (event.classification && event.classification.description) {
+            return event.classification.description;
+        }
+
+        // 基于事件类型生成描述
+        const actionMap: Record<string, string> = {
+            'position_open_long': '开多仓',
+            'position_open_short': '开空仓',
+            'position_close': '平仓',
+            'position_increase': '加仓',
+            'position_decrease': '减仓',
+            'position_reverse': '反向操作',
+            'position_update': '持仓更新'
+        };
+
+        return actionMap[event.eventType] || '持仓变化';
+    }
+
+    /**
+     * 格式化基础消息
+     */
+    private formatBasicMessage(
+        event: EnhancedContractEvent,
+        trader: ContractTrader,
+        operationDescription: string
+    ): string {
+        const asset = event.asset;
+        const side = event.side;
+        const size = event.size;
+        const price = parseFloat(event.price);
+        const notional = parseFloat(event.metadata?.notionalValue || '0');
+
+        const sideEmoji = side === 'long' ? '📈' : '📉';
+        const directionText = side === 'long' ? '多仓' : '空仓';
+
+        let message = `${sideEmoji} **${asset} ${operationDescription}** 📊\n`;
+        message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+
+        // 🎯 交易详情
+        message += `🎯 **交易详情**\n`;
+        message += `💰 **资产**: ${asset} | ${sideEmoji} **方向**: ${directionText} | 📊 **规模**: ${size}\n`;
+        message += `💵 **价格**: $${price.toLocaleString()} | 🏦 **价值**: $${notional.toLocaleString()}\n`;
+        message += `🔄 **操作**: ${operationDescription}\n`;
+        message += `⏰ **时间**: ${new Date(event.timestamp).toISOString().replace('T', ' ').slice(0, 19)} UTC\n`;
+
+        // 如果有持仓变化信息，显示它
+        if (event.positionChange) {
+            message += `\n📋 **持仓变化**\n`;
+            if (event.positionChange.sizeChange !== 0) {
+                const changeSign = event.positionChange.sizeChange > 0 ? '+' : '';
+                message += `📊 **数量变化**: ${changeSign}${event.positionChange.sizeChange.toFixed(6)}\n`;
+            }
+            if (event.positionChange.sideChanged) {
+                message += `🔄 **方向改变**: 是\n`;
+            }
+        }
+
+        return message;
     }
 }
 

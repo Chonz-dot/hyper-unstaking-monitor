@@ -5,18 +5,20 @@ import './polyfills';
 import RpcContractMonitor from './services/rpcContractMonitor';
 import HybridRpcContractMonitor from './services/hybridRpcContractMonitor';
 import PureRpcContractMonitor from './services/pureRpcContractMonitor';
+import { BatchedHyperliquidMonitor } from './services/hyperliquid-monitor';
 import AlertEngine from './engine/alert-engine';
 import CacheManager from './cache';
 import WebhookNotifier from './webhook';
 import logger from './logger';
 import config from './config';
-import { ContractEvent, ContractTrader } from './types';
+import { ContractEvent, ContractTrader, MonitorEvent } from './types';
 
 // 全局系统启动时间
 export const SYSTEM_START_TIME = Date.now();
 
 class TraderMonitor {
   private contractMonitor?: RpcContractMonitor | HybridRpcContractMonitor | PureRpcContractMonitor;
+  private spotMonitor?: BatchedHyperliquidMonitor;
   private alertEngine: AlertEngine;
   private cache: CacheManager;
   private notifier: WebhookNotifier;
@@ -84,10 +86,20 @@ class TraderMonitor {
       });
     }
 
+    // 初始化现货转账监听器
+    logger.info('🔧 初始化现货转账监听器...', {
+      addressCount: config.monitoring.addresses.length,
+      singleThreshold: config.monitoring.singleThreshold,
+      cumulativeThreshold: config.monitoring.cumulative24hThreshold
+    });
+
+    this.spotMonitor = new BatchedHyperliquidMonitor(this.handleSpotTransferEvent.bind(this));
+
     logger.info('HYPE解锁监控系统初始化完成', {
       transferMonitoring: true,
       contractMonitoring: config.contractMonitoring.enabled,
-      contractTraders: config.contractMonitoring.enabled ? config.contractMonitoring.traders.length : 0
+      contractTraders: config.contractMonitoring.enabled ? config.contractMonitoring.traders.length : 0,
+      spotAddresses: config.monitoring.addresses.length
     });
   }
 
@@ -138,6 +150,29 @@ class TraderMonitor {
         logger.warn('合约监控器未初始化，跳过启动');
       }
 
+      // 启动现货转账监听器
+      if (this.spotMonitor) {
+        try {
+          logger.info('开始启动现货转账监听器...');
+          
+          await Promise.race([
+            this.spotMonitor.start(),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('现货监听器启动超时')), 120000) // 2分钟超时
+            )
+          ]);
+          
+          logger.info('✅ 现货转账监听器启动完成', {
+            addressCount: config.monitoring.addresses.length
+          });
+        } catch (error) {
+          logger.error('现货转账监听器启动失败:', error);
+          // 不抛出错误，继续运行其他功能
+        }
+      } else {
+        logger.warn('现货监听器未初始化，跳过启动');
+      }
+
       this.isRunning = true;
 
       logger.info('交易员监控系统启动成功', {
@@ -178,6 +213,24 @@ class TraderMonitor {
     }
   }
 
+  private async handleSpotTransferEvent(event: MonitorEvent): Promise<void> {
+    try {
+      logger.info('收到现货转账事件', {
+        eventType: event.eventType,
+        address: event.address,
+        amount: event.amount,
+        hash: event.hash,
+        asset: event.asset
+      });
+
+      // 通过警报引擎处理现货转账事件
+      await this.alertEngine.processEvent(event);
+
+    } catch (error) {
+      logger.error('处理现货转账事件失败:', error, { event });
+    }
+  }
+
   private async handleContractEvent(event: any, trader: ContractTrader): Promise<void> {
     try {
       logger.info('收到增强合约事件', {
@@ -203,6 +256,11 @@ class TraderMonitor {
       // 停止合约监控
       if (this.contractMonitor) {
         await this.contractMonitor.stop();
+      }
+
+      // 停止现货转账监听器
+      if (this.spotMonitor) {
+        await this.spotMonitor.stop();
       }
 
       // 断开Redis连接
