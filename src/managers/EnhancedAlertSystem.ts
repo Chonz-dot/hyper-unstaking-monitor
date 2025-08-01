@@ -13,8 +13,8 @@ export class EnhancedAlertSystem {
     // 配置选项
     private config: EnhancedAlertConfig = {
         enablePositionAnalysis: true,
-        analysisThreshold: 1000,           // $1000 以上开仓才分析
-        maxDailyAnalysis: 10,              // 每交易员每日最多10次分析
+        analysisThreshold: 10,             // 降低到 $10，更容易触发分析
+        maxDailyAnalysis: 20,              // 增加到每日20次
         detailLevel: 'enhanced',           // 详细程度
         includeRiskWarnings: true,
         includeStrategicInsights: true,
@@ -282,9 +282,21 @@ export class EnhancedAlertSystem {
             return false;
         }
         
-        // 检查是否是开仓操作
-        if (!event.eventType.includes('open') && !event.eventType.includes('increase')) {
+        // 检查是否是开仓操作 - 更宽松的判断
+        const isOpeningOperation = event.eventType.includes('open') || 
+                                  event.eventType.includes('increase') ||
+                                  (event.classification && (
+                                      event.classification.type.includes('OPEN') ||
+                                      event.classification.type.includes('INCREASE')
+                                  ));
+        
+        if (!isOpeningOperation) {
             this.stats.analysisSkipped++;
+            logger.debug(`🔄 非开仓操作，跳过分析`, {
+                trader: trader.label,
+                eventType: event.eventType,
+                classificationType: event.classification?.type || 'unknown'
+            });
             return false;
         }
         

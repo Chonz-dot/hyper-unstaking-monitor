@@ -53,8 +53,17 @@ export class TradeClassificationEngine {
                     attempt
                 });
 
-                // 获取交易前的持仓状态（如果有缓存的话）
-                const beforePosition = await this.positionManager.getAssetPosition(trader.address, asset);
+                // 获取交易前的持仓状态
+                let beforePosition: AssetPosition | null = null;
+                
+                // 尝试从缓存获取历史持仓，而不是当前持仓
+                try {
+                    const cachedPosition = await this.positionManager.getAssetPosition(trader.address, asset);
+                    // 如果有缓存，先使用缓存作为 before 状态
+                    beforePosition = cachedPosition;
+                } catch (error) {
+                    logger.debug(`无法获取缓存持仓，将在交易后推算`, { trader: trader.label, asset });
+                }
                 
                 // 计算等待时间：首次5秒，重试时逐渐增加
                 const waitTime = delayMs + (attempt * 3000); // 每次重试增加3秒
@@ -67,6 +76,17 @@ export class TradeClassificationEngine {
                 // 强制刷新获取交易后的持仓状态
                 await this.positionManager.refreshUserPosition(trader.address);
                 const afterPosition = await this.positionManager.getAssetPosition(trader.address, asset);
+                
+                // 如果之前没有获取到 beforePosition，尝试根据交易推算
+                if (!beforePosition && afterPosition) {
+                    beforePosition = this.estimateBeforePosition(afterPosition, fill);
+                    logger.debug(`📊 推算交易前持仓`, {
+                        trader: trader.label,
+                        asset,
+                        estimatedBefore: beforePosition,
+                        actualAfter: afterPosition
+                    });
+                }
                 
                 // 分析持仓变化
                 const changeAnalysis = await this.positionManager.comparePositionChange(
@@ -179,6 +199,51 @@ export class TradeClassificationEngine {
     }
 
     /**
+     * 根据交易后持仓推算交易前持仓
+     */
+    private estimateBeforePosition(afterPosition: AssetPosition, fill: any): AssetPosition | null {
+        const fillSize = parseFloat(fill.sz || '0');
+        const fillSide = fill.side === 'B' ? 'long' : 'short';
+        
+        // 如果交易后无持仓，说明这是平仓操作
+        if (afterPosition.size === 0) {
+            return {
+                asset: afterPosition.asset,
+                size: Math.abs(fillSize),
+                side: fillSide === 'long' ? 'short' : 'long', // 反向
+                entryPrice: afterPosition.entryPrice,
+                unrealizedPnl: 0,
+                notionalValue: Math.abs(fillSize) * afterPosition.entryPrice
+            };
+        }
+        
+        // 根据交易方向推算
+        if (afterPosition.side === fillSide) {
+            // 同方向，可能是加仓
+            const beforeSize = Math.max(0, afterPosition.size - Math.abs(fillSize));
+            return {
+                asset: afterPosition.asset,
+                size: beforeSize,
+                side: afterPosition.side,
+                entryPrice: afterPosition.entryPrice,
+                unrealizedPnl: afterPosition.unrealizedPnl,
+                notionalValue: beforeSize * afterPosition.entryPrice
+            };
+        } else {
+            // 反方向，可能是从反向仓位平仓后开仓
+            const beforeSize = afterPosition.size + Math.abs(fillSize);
+            return {
+                asset: afterPosition.asset,
+                size: beforeSize,
+                side: fillSide === 'long' ? 'short' : 'long', // 反向
+                entryPrice: afterPosition.entryPrice,
+                unrealizedPnl: 0,
+                notionalValue: beforeSize * afterPosition.entryPrice
+            };
+        }
+    }
+
+    /**
      * 验证交易分类结果的合理性 (增强版)
      */
     private validateTradeClassification(
@@ -208,26 +273,30 @@ export class TradeClassificationEngine {
         
         // 检查基本逻辑一致性
         if (changeAnalysis.changeType === 'NO_CHANGE') {
-            // 如果检测到NO_CHANGE但有实际交易，这可能是合理的情况：
-            // 1. 同时有其他交易发生
-            // 2. API延迟导致状态未及时更新
-            // 3. 浮点数精度问题
+            // 如果检测到NO_CHANGE但有实际交易，可能的合理情况：
+            const fillSizeSignificant = fillSize > tolerance;
             
-            if (isRetry) {
-                // 重试时更宽容，允许一些异常情况
-                logger.debug(`🔄 重试验证：检测到NO_CHANGE但有交易，宽容处理`, {
-                    fillSize,
-                    beforePosition,
-                    afterPosition
-                });
-                return { isValid: true, reason: '重试时宽容验证通过' };
-            }
-            
-            // 首次验证时，如果有明显的交易但无变化，标记为需要重试
-            if (fillSize > tolerance) {
+            if (!isRetry && fillSizeSignificant) {
+                // 首次检测，如果交易金额显著，需要重试
                 return {
                     isValid: false,
                     reason: `检测到交易 (${fillSize}) 但持仓无变化，需要重试`
+                };
+            }
+            
+            // 重试时或小额交易，使用智能分类
+            if (fillSizeSignificant) {
+                logger.warn(`🤔 NO_CHANGE但有显著交易，可能是复杂场景`, {
+                    fillSize,
+                    beforeSize: beforePosition?.size || 0,
+                    afterSize: afterPosition?.size || 0,
+                    isRetry
+                });
+                
+                // 强制使用后备分类而不是标记为失败
+                return { 
+                    isValid: true, 
+                    reason: '复杂交易场景，使用智能分类'
                 };
             }
         }
