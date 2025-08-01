@@ -224,21 +224,31 @@ export class TradeClassificationEngine {
         const fillSize = parseFloat(fill.sz || '0');
         const fillSide = fill.side === 'B' ? 'long' : 'short';
         
+        logger.debug('📊 推算交易前持仓', {
+            fillSize,
+            fillSide,
+            afterSize: afterPosition.size,
+            afterSide: afterPosition.side
+        });
+        
         // 如果交易后无持仓，说明这是平仓操作
         if (afterPosition.size === 0) {
+            // 卖出(B=false)平多仓，买入(B=true)平空仓
+            const beforeSide = fillSide === 'short' ? 'long' : 'short';
+            
             return {
                 asset: afterPosition.asset,
                 size: Math.abs(fillSize),
-                side: fillSide === 'long' ? 'short' : 'long', // 反向
-                entryPrice: afterPosition.entryPrice,
+                side: beforeSide,
+                entryPrice: parseFloat(fill.px || '0'),
                 unrealizedPnl: 0,
-                notionalValue: Math.abs(fillSize) * afterPosition.entryPrice
+                notionalValue: Math.abs(fillSize) * parseFloat(fill.px || '0')
             };
         }
         
         // 根据交易方向推算
         if (afterPosition.side === fillSide) {
-            // 同方向，可能是加仓
+            // 同方向，说明是加仓操作
             const beforeSize = Math.max(0, afterPosition.size - Math.abs(fillSize));
             return {
                 asset: afterPosition.asset,
@@ -249,15 +259,15 @@ export class TradeClassificationEngine {
                 notionalValue: beforeSize * afterPosition.entryPrice
             };
         } else {
-            // 反方向，可能是从反向仓位平仓后开仓
-            const beforeSize = afterPosition.size + Math.abs(fillSize);
+            // 反方向交易，可能是从反向仓位转换而来
+            // 这种情况比较复杂，保守估计
             return {
                 asset: afterPosition.asset,
-                size: beforeSize,
-                side: fillSide === 'long' ? 'short' : 'long', // 反向
-                entryPrice: afterPosition.entryPrice,
+                size: Math.abs(fillSize),
+                side: fillSide === 'long' ? 'short' : 'long',
+                entryPrice: parseFloat(fill.px || '0'),
                 unrealizedPnl: 0,
-                notionalValue: beforeSize * afterPosition.entryPrice
+                notionalValue: Math.abs(fillSize) * parseFloat(fill.px || '0')
             };
         }
     }
@@ -335,7 +345,31 @@ export class TradeClassificationEngine {
             };
         }
         
-        // 策略3: 有持仓但没变化 - 可能是对冲交易或开平同时
+        // 策略3: 检查是否是平仓操作 - 关键修复
+        if (afterPosition && afterPosition.size === 0 && fillSize > 0) {
+            // 有交易但最终无持仓，很可能是平仓
+            return {
+                eventType: 'position_close',
+                description: '平仓操作',
+                confidence: 'high'
+            };
+        }
+        
+        // 策略4: 检查是否是减仓平仓（部分平仓）
+        if (beforePosition && afterPosition && 
+            beforePosition.size > afterPosition.size && 
+            beforePosition.side === afterPosition.side) {
+            const sizeReduction = beforePosition.size - afterPosition.size;
+            if (Math.abs(sizeReduction - fillSize) < fillSize * 0.1) {
+                return {
+                    eventType: 'position_decrease',
+                    description: '减仓',
+                    confidence: 'high'
+                };
+            }
+        }
+        
+        // 策略4: 有持仓但没变化 - 可能是对冲交易
         if (beforePosition.side === fillSide) {
             // 同方向交易，可能是加仓
             return {

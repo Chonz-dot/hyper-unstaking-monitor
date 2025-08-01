@@ -208,6 +208,43 @@ export class WebhookNotifier {
   }
 
   private async makeContractRequest(webhookUrl: string, alert: ContractWebhookAlert): Promise<void> {
+    // 🔍 检查是否是增强告警
+    const enhancedAlert = alert as any;
+    if (enhancedAlert.enhanced && enhancedAlert.formattedMessage) {
+      logger.info('📨 发送增强告警消息', {
+        trader: alert.traderLabel,
+        asset: alert.asset,
+        enhanced: true,
+        messageLength: enhancedAlert.formattedMessage.length,
+        hasFormattedMessage: !!enhancedAlert.formattedMessage
+      });
+
+      // 直接发送增强消息
+      const enhancedPayload = {
+        text: enhancedAlert.formattedMessage,
+        username: 'Trading Analysis',
+        icon_emoji: ':microscope:',
+        parseUrls: false
+      };
+
+      const response = await axios.post(webhookUrl, enhancedPayload, {
+        timeout: this.timeout,
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      if (response.status >= 400) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      return;
+    }
+
+    // 🔧 原有的基础告警格式化逻辑
+    logger.debug('📨 发送基础告警消息', {
+      trader: alert.traderLabel,
+      asset: alert.asset,
+      enhanced: false
+    });
+
     // 格式化金额显示
     const formatAmount = (amount: string) => {
       const num = parseFloat(amount);

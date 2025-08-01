@@ -9,21 +9,21 @@ import logger from '../logger';
  */
 export class EnhancedAlertSystem {
     private analysisEngine: PositionAnalysisEngine;
-    
+
     // 配置选项
     private config: EnhancedAlertConfig = {
         enablePositionAnalysis: true,
         analysisThreshold: 10,             // 降低到 $10，更容易触发分析
         maxDailyAnalysis: 20,              // 增加到每日20次
         detailLevel: 'enhanced',           // 详细程度
-        includeRiskWarnings: true,
-        includeStrategicInsights: true,
+        includeRiskWarnings: false,        // 关闭风险警告
+        includeStrategicInsights: false,   // 关闭策略洞察
         customEmojis: true
     };
-    
+
     // 分析频率控制
     private analysisHistory = new Map<string, number[]>(); // trader.address -> timestamps[]
-    
+
     private stats = {
         totalAlerts: 0,
         enhancedAlerts: 0,
@@ -37,7 +37,7 @@ export class EnhancedAlertSystem {
         if (config) {
             this.config = { ...this.config, ...config };
         }
-        
+
         logger.info('🚨 增强告警系统初始化完成', {
             config: this.config
         });
@@ -52,10 +52,10 @@ export class EnhancedAlertSystem {
     ): Promise<EnhancedWebhookAlert> {
         try {
             this.stats.totalAlerts++;
-            
+
             const notionalValue = parseFloat(event.metadata?.notionalValue || '0');
             const shouldAnalyze = this.shouldPerformAnalysis(trader, notionalValue, event);
-            
+
             logger.debug(`🔍 处理增强告警`, {
                 trader: trader.label,
                 asset: event.asset,
@@ -63,20 +63,20 @@ export class EnhancedAlertSystem {
                 notional: notionalValue,
                 shouldAnalyze
             });
-            
+
             if (shouldAnalyze) {
                 return await this.createAnalysisEnhancedAlert(event, trader);
             } else {
                 return this.createBasicEnhancedAlert(event, trader);
             }
-            
+
         } catch (error) {
             this.stats.errors++;
             logger.error(`❌ 创建增强告警失败`, {
                 trader: trader.label,
                 error: error instanceof Error ? error.message : error
             });
-            
+
             // 降级到基础告警
             return this.createBasicEnhancedAlert(event, trader);
         }
@@ -91,15 +91,15 @@ export class EnhancedAlertSystem {
     ): Promise<EnhancedWebhookAlert> {
         this.stats.enhancedAlerts++;
         this.recordAnalysis(trader.address);
-        
+
         logger.info(`📊 生成带分析的增强告警`, {
             trader: trader.label,
             asset: event.asset
         });
-        
+
         // 执行持仓分析
         const analysisReport = await this.analysisEngine.analyzePosition(trader, event.asset);
-        
+
         if (analysisReport) {
             return this.formatAnalysisAlert(event, trader, analysisReport);
         } else {
@@ -116,7 +116,7 @@ export class EnhancedAlertSystem {
         trader: ContractTrader
     ): EnhancedWebhookAlert {
         this.stats.basicAlerts++;
-        
+
         const alert: EnhancedWebhookAlert = {
             timestamp: event.timestamp,
             alertType: this.mapEventTypeToAlertType(event.eventType),
@@ -129,14 +129,14 @@ export class EnhancedAlertSystem {
             txHash: event.hash,
             blockTime: event.blockTime,
             notionalValue: event.metadata?.notionalValue,
-            
+
             // 增强字段
             classification: event.classification,
             positionChange: event.positionChange,
             enhanced: false,
             alertLevel: 'basic'
         };
-        
+
         return alert;
     }
 
@@ -148,6 +148,17 @@ export class EnhancedAlertSystem {
         trader: ContractTrader,
         analysis: PositionAnalysisReport
     ): EnhancedWebhookAlert {
+        const formattedMessage = this.formatEnhancedMessage(event, trader, analysis);
+
+        logger.info('✅ 增强告警创建完成', {
+            trader: trader.label,
+            enhanced: true,
+            hasFormattedMessage: !!formattedMessage,
+            messageLength: formattedMessage?.length || 0,
+            riskLevel: analysis.overallRisk.level,
+            signalStars: analysis.strategicInsights.signalStars
+        });
+
         const alert: EnhancedWebhookAlert = {
             timestamp: event.timestamp,
             alertType: this.mapEventTypeToAlertType(event.eventType),
@@ -160,13 +171,13 @@ export class EnhancedAlertSystem {
             txHash: event.hash,
             blockTime: event.blockTime,
             notionalValue: event.metadata?.notionalValue,
-            
+
             // 增强字段
             classification: event.classification,
             positionChange: event.positionChange,
             enhanced: true,
             alertLevel: 'enhanced',
-            
+
             // 分析数据
             positionAnalysis: {
                 riskLevel: analysis.overallRisk.level,
@@ -175,11 +186,11 @@ export class EnhancedAlertSystem {
                 signalStrength: analysis.strategicInsights.signalStrength,
                 signalStars: analysis.strategicInsights.signalStars
             },
-            
+
             // 格式化的消息内容
-            formattedMessage: this.formatEnhancedMessage(event, trader, analysis)
+            formattedMessage: formattedMessage
         };
-        
+
         return alert;
     }
 
@@ -196,73 +207,50 @@ export class EnhancedAlertSystem {
         const size = event.size;
         const price = parseFloat(event.price);
         const notional = parseFloat(event.metadata?.notionalValue || '0');
-        
+
         const sideEmoji = side === 'long' ? '📈' : '📉';
         const directionText = side === 'long' ? '多仓' : '空仓';
         const actionText = this.getActionText(event.eventType);
-        
-        let message = `${sideEmoji} **${asset} ${directionText}${actionText}** - 智能持仓分析 📊\n`;
+
+        let message = `${sideEmoji} **${asset} ${directionText}${actionText}** - 持仓分析 📊\n`;
         message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-        
+
         // 🎯 交易详情
         message += `🎯 **交易详情**\n`;
         message += `💰 **资产**: ${asset} | ${sideEmoji} **方向**: ${directionText} | 📊 **规模**: ${size}\n`;
         message += `💵 **价格**: $${price.toLocaleString()} | 🏦 **价值**: $${notional.toLocaleString()}\n`;
         message += `⏰ **时间**: ${new Date(event.timestamp).toISOString().replace('T', ' ').slice(0, 19)} UTC\n\n`;
-        
+
         // 📋 持仓变化分析
         message += `📋 **持仓变化分析**\n`;
         message += `🔄 **操作类型**: ${event.classification.description}\n`;
         message += `📈 **总持仓**: $${analysis.userPosition.totalNotionalValue.toLocaleString()}\n`;
-        message += `🎲 **风险度**: ${analysis.overallRisk.temperature} ${analysis.overallRisk.emoji}\n\n`;
-        
+
         // 💼 资产配置分析
         if (analysis.assetAllocation.topAssets.length > 0) {
             message += `💼 **资产配置分析**\n`;
             message += `📊 **当前配置**:\n`;
-            
-            analysis.assetAllocation.topAssets.slice(0, 2).forEach(assetItem => {
+
+            analysis.assetAllocation.topAssets.slice(0, 3).forEach(assetItem => {
                 const emoji = assetItem.side === 'long' ? '📈' : '📉';
-                const changeIndicator = assetItem.asset === event.asset ? ' 🔺新增' : '';
+                const changeIndicator = assetItem.asset === event.asset ? ' 🔺' : '';
                 message += `• ${assetItem.asset}: ${(assetItem.percentage * 100).toFixed(1)}% ($${assetItem.notionalValue.toLocaleString()}) - ${assetItem.side}${changeIndicator}\n`;
             });
-            
-            if (analysis.riskExposure.maxSingleAssetExposure > 0.6) {
-                message += `🎯 **集中度风险**: 偏高 (单一资产>${(analysis.riskExposure.maxSingleAssetExposure * 100).toFixed(0)}%)\n\n`;
+
+            if (analysis.riskExposure.maxSingleAssetExposure > 0.66) {
+                const topAssetPercentage = (analysis.riskExposure.maxSingleAssetExposure * 100).toFixed(0);
+                message += `🎯 **集中度**: 单一资产占比 ${topAssetPercentage}%\n\n`;
             } else {
-                message += `🎯 **配置评估**: 合理分散\n\n`;
+                message += `🎯 **集中度**: 相对分散\n\n`;
             }
         }
-        
+
         // ⚖️ 风险评估
         message += `⚖️ **风险评估**\n`;
         message += `📊 **杠杆**: ${analysis.riskExposure.effectiveLeverage.toFixed(1)}x`;
         message += ` | 💰 **资金利用**: ${(analysis.riskExposure.capitalUtilization * 100).toFixed(1)}%`;
-        message += ` | 🌡️ **风险**: ${analysis.overallRisk.temperature}\n\n`;
-        
-        // 🧠 策略洞察
-        message += `🧠 **策略洞察**\n`;
-        message += `📈 **信号强度**: ${analysis.strategicInsights.signalStars}`;
-        
-        // 获取市场情绪描述
-        const sentimentText = this.getSentimentText(analysis.strategicInsights.marketSentiment);
-        if (sentimentText) {
-            message += ` (${sentimentText})`;
-        }
-        message += `\n`;
-        
-        // 添加关键洞察
-        if (analysis.strategicInsights.insights.length > 0) {
-            const keyInsight = analysis.strategicInsights.insights[0];
-            message += `💡 **关键洞察**: ${keyInsight}\n`;
-        }
-        
-        // 添加风险警告
-        if (analysis.strategicInsights.riskWarnings.length > 0) {
-            const mainWarning = analysis.strategicInsights.riskWarnings[0];
-            message += `⚠️ **风险提示**: ${mainWarning}`;
-        }
-        
+        message += ` | 🌡️ **风险**: ${analysis.overallRisk.temperature}`;
+
         return message;
     }
 
@@ -275,21 +263,21 @@ export class EnhancedAlertSystem {
         event: EnhancedContractEvent
     ): boolean {
         if (!this.config.enablePositionAnalysis) return false;
-        
+
         // 检查金额阈值
         if (notionalValue < this.config.analysisThreshold) {
             this.stats.analysisSkipped++;
             return false;
         }
-        
+
         // 检查是否是开仓操作 - 更宽松的判断
-        const isOpeningOperation = event.eventType.includes('open') || 
-                                  event.eventType.includes('increase') ||
-                                  (event.classification && (
-                                      event.classification.type.includes('OPEN') ||
-                                      event.classification.type.includes('INCREASE')
-                                  ));
-        
+        const isOpeningOperation = event.eventType.includes('open') ||
+            event.eventType.includes('increase') ||
+            (event.classification && (
+                event.classification.type.includes('OPEN') ||
+                event.classification.type.includes('INCREASE')
+            ));
+
         if (!isOpeningOperation) {
             this.stats.analysisSkipped++;
             logger.debug(`🔄 非开仓操作，跳过分析`, {
@@ -299,13 +287,13 @@ export class EnhancedAlertSystem {
             });
             return false;
         }
-        
+
         // 检查频率限制
         if (!this.checkAnalysisFrequency(trader.address)) {
             this.stats.analysisSkipped++;
             return false;
         }
-        
+
         return true;
     }
 
@@ -315,11 +303,11 @@ export class EnhancedAlertSystem {
     private checkAnalysisFrequency(traderAddress: string): boolean {
         const now = Date.now();
         const oneDayAgo = now - 24 * 60 * 60 * 1000;
-        
+
         let history = this.analysisHistory.get(traderAddress) || [];
         history = history.filter(timestamp => timestamp > oneDayAgo);
         this.analysisHistory.set(traderAddress, history);
-        
+
         return history.length < this.config.maxDailyAnalysis;
     }
 
@@ -338,13 +326,13 @@ export class EnhancedAlertSystem {
     private mapEventTypeToAlertType(eventType: string): ContractWebhookAlert['alertType'] {
         const mapping: Record<string, ContractWebhookAlert['alertType']> = {
             'position_open_long': 'position_open_long',
-            'position_open_short': 'position_open_short', 
+            'position_open_short': 'position_open_short',
             'position_close': 'position_close',
             'position_increase': 'position_update',
             'position_decrease': 'position_update',
             'position_reverse': 'position_reverse'
         };
-        
+
         return mapping[eventType] || 'position_update';
     }
 
@@ -360,7 +348,7 @@ export class EnhancedAlertSystem {
             'position_decrease': '减仓',
             'position_reverse': '反向'
         };
-        
+
         return actionMap[eventType] || '更新';
     }
 
@@ -375,7 +363,7 @@ export class EnhancedAlertSystem {
             'cautiously_bearish': '谨慎看跌',
             'neutral': '中性'
         };
-        
+
         return sentimentMap[sentiment] || '';
     }
 
@@ -385,7 +373,7 @@ export class EnhancedAlertSystem {
     getStats() {
         return {
             ...this.stats,
-            enhancedRate: this.stats.totalAlerts > 0 
+            enhancedRate: this.stats.totalAlerts > 0
                 ? Math.round((this.stats.enhancedAlerts / this.stats.totalAlerts) * 100)
                 : 0,
             config: this.config
@@ -407,7 +395,7 @@ export interface EnhancedWebhookAlert extends ContractWebhookAlert {
     };
     enhanced: boolean;
     alertLevel: 'basic' | 'enhanced';
-    
+
     // 分析数据（仅增强告警）
     positionAnalysis?: {
         riskLevel: string;
@@ -416,7 +404,7 @@ export interface EnhancedWebhookAlert extends ContractWebhookAlert {
         signalStrength: number;
         signalStars: string;
     };
-    
+
     // 格式化消息
     formattedMessage?: string;
 }

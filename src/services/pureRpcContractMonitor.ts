@@ -166,6 +166,11 @@ export class PureRpcContractMonitor extends EventEmitter {
                 });
             }
 
+            // 预加载所有交易员的持仓数据
+            logger.info('🔄 预加载交易员持仓数据...');
+            const traderAddresses = this.traders.map(trader => trader.address);
+            await this.positionManager.preloadUserPositions(traderAddresses);
+
             // 为每个交易员启动独立的轮询
             for (const trader of this.traders) {
                 this.startTraderPolling(trader);

@@ -33,6 +33,36 @@ export class PositionStateManager {
     }
 
     /**
+     * 预加载用户持仓数据（系统启动时调用）
+     */
+    async preloadUserPositions(userAddresses: string[]): Promise<void> {
+        logger.info('🔄 开始预加载用户持仓数据', {
+            userCount: userAddresses.length
+        });
+
+        const preloadPromises = userAddresses.map(async (address) => {
+            try {
+                await this.getUserPosition(address);
+                logger.debug(`✅ 预加载持仓成功`, {
+                    user: this.formatAddress(address)
+                });
+            } catch (error) {
+                logger.warn(`⚠️ 预加载持仓失败`, {
+                    user: this.formatAddress(address),
+                    error: error instanceof Error ? error.message : error
+                });
+            }
+        });
+
+        await Promise.allSettled(preloadPromises);
+        
+        logger.info('✅ 用户持仓数据预加载完成', {
+            cacheSize: this.positionCache.size,
+            successfulLoads: this.positionCache.size
+        });
+    }
+
+    /**
      * 获取用户持仓状态
      */
     async getUserPosition(userAddress: string): Promise<UserPositionState | null> {
