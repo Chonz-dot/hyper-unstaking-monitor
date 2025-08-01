@@ -178,21 +178,20 @@ class TraderMonitor {
     }
   }
 
-  private async handleContractEvent(event: ContractEvent, trader: ContractTrader): Promise<void> {
+  private async handleContractEvent(event: any, trader: ContractTrader): Promise<void> {
     try {
-      logger.info('收到合约事件', {
+      logger.info('收到增强合约事件', {
         trader: trader.label,
-        eventType: event.eventType,
+        alertType: event.alertType || event.eventType,
         asset: event.asset,
         size: event.size,
-        side: event.side
+        side: event.side,
+        enhanced: event.enhanced || false,
+        alertLevel: event.alertLevel || 'basic'
       });
 
-      // 创建webhook警报
-      if (this.contractMonitor) {
-        const alert = this.contractMonitor.createWebhookAlert(event, trader);
-        await this.notifier.sendContractAlert(alert);
-      }
+      // 直接发送增强告警（已经是格式化的告警对象）
+      await this.notifier.sendContractAlert(event);
 
     } catch (error) {
       logger.error('处理合约事件失败:', error, { event, trader });

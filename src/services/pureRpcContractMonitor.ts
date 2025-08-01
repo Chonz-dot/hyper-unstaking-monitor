@@ -4,6 +4,8 @@ import logger from '../logger';
 import * as hl from '@nktkas/hyperliquid';
 import { PositionStateManager } from '../managers/PositionStateManager';
 import { TradeClassificationEngine, EnhancedContractEvent } from '../managers/TradeClassificationEngine';
+import { PositionAnalysisEngine } from '../managers/PositionAnalysisEngine';
+import { EnhancedAlertSystem } from '../managers/EnhancedAlertSystem';
 
 /**
  * 纯净RPC合约监控器 
@@ -20,6 +22,8 @@ export class PureRpcContractMonitor extends EventEmitter {
     // 增强功能组件
     private positionManager: PositionStateManager;
     private classificationEngine: TradeClassificationEngine;
+    private analysisEngine: PositionAnalysisEngine;
+    private alertSystem: EnhancedAlertSystem;
     
     // 轮询配置 - 平衡性能和API限制
     private readonly POLLING_INTERVAL = 15000; // 15秒轮询间隔，减少API压力
@@ -71,6 +75,8 @@ export class PureRpcContractMonitor extends EventEmitter {
         // 初始化增强功能组件
         this.positionManager = new PositionStateManager(this.infoClient);
         this.classificationEngine = new TradeClassificationEngine(this.positionManager);
+        this.analysisEngine = new PositionAnalysisEngine(this.positionManager);
+        this.alertSystem = new EnhancedAlertSystem(this.analysisEngine);
         
         // 初始化时间：从1小时前开始，更保守
         const oneHourAgo = Date.now() - 60 * 60 * 1000;
@@ -78,14 +84,20 @@ export class PureRpcContractMonitor extends EventEmitter {
             this.lastProcessedTime.set(trader.address, oneHourAgo);
         });
 
-        logger.info('🔄 初始化纯净RPC合约监控器 (增强版)', {
+        logger.info('🔄 初始化纯净RPC合约监控器 (增强版 v2.0)', {
             activeTraders: this.traders.length,
             minNotionalValue,
-            strategy: '官方API + 智能交易分类',
+            strategy: '官方API + 智能交易分类 + 持仓分析',
             pollingInterval: `${this.POLLING_INTERVAL / 1000}s`,
             orderCompletionDelay: `${this.ORDER_COMPLETION_DELAY / 1000}s`,
             initialTimeRange: '1小时前开始',
-            enhancedFeatures: ['持仓状态管理', '智能交易分类', '增强事件分析']
+            enhancedFeatures: [
+                '持仓状态管理', 
+                '智能交易分类', 
+                '多维度持仓分析',
+                '增强告警系统',
+                '风险评估引擎'
+            ]
         });
     }
 
@@ -494,8 +506,18 @@ export class PureRpcContractMonitor extends EventEmitter {
                     positionChange: enhancedEvent.positionChange
                 });
 
-                // 发射增强的事件
-                this.emit('contractEvent', enhancedEvent, trader);
+                // 创建增强告警
+                const enhancedAlert = await this.alertSystem.createEnhancedAlert(enhancedEvent, trader);
+                
+                logger.info(`🚨 ${trader.label} 增强告警生成`, {
+                    alertLevel: enhancedAlert.alertLevel,
+                    enhanced: enhancedAlert.enhanced,
+                    riskLevel: enhancedAlert.positionAnalysis?.riskLevel,
+                    signalStrength: enhancedAlert.positionAnalysis?.signalStars
+                });
+
+                // 发射增强的告警事件 
+                this.emit('contractEvent', enhancedAlert, trader);
                 this.stats.totalEvents++;
             } else {
                 logger.warn(`⚠️ ${trader.label} 交易分类失败，跳过事件`);
@@ -875,7 +897,9 @@ export class PureRpcContractMonitor extends EventEmitter {
                 
                 // 增强功能统计
                 positionManager: this.positionManager.getStats(),
-                classificationEngine: this.classificationEngine.getStats()
+                classificationEngine: this.classificationEngine.getStats(),
+                analysisEngine: this.analysisEngine.getStats(),
+                alertSystem: this.alertSystem.getStats()
             });
 
         }, 60000); // 每分钟报告一次状态
@@ -908,7 +932,7 @@ export class PureRpcContractMonitor extends EventEmitter {
     getStats() {
         return {
             isRunning: this.isRunning,
-            strategy: 'pure-rpc-official-api-enhanced',
+            strategy: 'pure-rpc-official-api-enhanced-v2',
             traders: this.traders.length,
             startTime: this.startTime,
             uptime: this.isRunning ? Date.now() - this.startTime : 0,
@@ -920,7 +944,9 @@ export class PureRpcContractMonitor extends EventEmitter {
             // 增强功能统计
             enhancedFeatures: {
                 positionManager: this.positionManager.getStats(),
-                classificationEngine: this.classificationEngine.getStats()
+                classificationEngine: this.classificationEngine.getStats(),
+                analysisEngine: this.analysisEngine.getStats(),
+                alertSystem: this.alertSystem.getStats()
             }
         };
     }
@@ -947,8 +973,12 @@ export class PureRpcContractMonitor extends EventEmitter {
             enhancedFeatures: {
                 positionManagerEnabled: true,
                 classificationEngineEnabled: true,
+                analysisEngineEnabled: true,
+                alertSystemEnabled: true,
                 positionCacheSize: this.positionManager.getStats().cacheSize,
-                classificationSuccessRate: this.classificationEngine.getStats().successRate + '%'
+                classificationSuccessRate: this.classificationEngine.getStats().successRate + '%',
+                totalAnalysis: this.analysisEngine.getStats().totalAnalysis,
+                enhancedAlertRate: this.alertSystem.getStats().enhancedRate + '%'
             }
         };
     }

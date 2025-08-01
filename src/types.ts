@@ -91,7 +91,7 @@ export interface WebhookAlert {
 // 合约交易Webhook警报格式
 export interface ContractWebhookAlert {
   timestamp: number;
-  alertType: 'position_open_long' | 'position_open_short' | 'position_close' | 'position_update';
+  alertType: 'position_open_long' | 'position_open_short' | 'position_close' | 'position_update' | 'position_reverse';
   address: string;
   traderLabel?: string;
   asset: string;
