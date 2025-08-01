@@ -5,7 +5,7 @@ import './polyfills';
 import RpcContractMonitor from './services/rpcContractMonitor';
 import HybridRpcContractMonitor from './services/hybridRpcContractMonitor';
 import PureRpcContractMonitor from './services/pureRpcContractMonitor';
-import { BatchedHyperliquidMonitor } from './services/hyperliquid-monitor';
+import RpcSpotMonitor from './services/rpcSpotMonitor';
 import AlertEngine from './engine/alert-engine';
 import CacheManager from './cache';
 import WebhookNotifier from './webhook';
@@ -18,7 +18,7 @@ export const SYSTEM_START_TIME = Date.now();
 
 class TraderMonitor {
   private contractMonitor?: RpcContractMonitor | HybridRpcContractMonitor | PureRpcContractMonitor;
-  private spotMonitor?: BatchedHyperliquidMonitor;
+  private spotMonitor?: RpcSpotMonitor;
   private alertEngine: AlertEngine;
   private cache: CacheManager;
   private notifier: WebhookNotifier;
@@ -86,14 +86,16 @@ class TraderMonitor {
       });
     }
 
-    // 初始化现货转账监听器
-    logger.info('🔧 初始化现货转账监听器...', {
+    // 初始化现货转账监听器（RPC版本）
+    logger.info('🔧 初始化RPC现货转账监听器...', {
       addressCount: config.monitoring.addresses.length,
       singleThreshold: config.monitoring.singleThreshold,
-      cumulativeThreshold: config.monitoring.cumulative24hThreshold
+      cumulativeThreshold: config.monitoring.cumulative24hThreshold,
+      strategy: 'RPC轮询（更稳定）'
     });
 
-    this.spotMonitor = new BatchedHyperliquidMonitor(this.handleSpotTransferEvent.bind(this));
+    this.spotMonitor = new RpcSpotMonitor(config.monitoring.addresses);
+    this.spotMonitor.on('spotEvent', this.handleSpotTransferEvent.bind(this));
 
     logger.info('HYPE解锁监控系统初始化完成', {
       transferMonitoring: true,
@@ -150,27 +152,29 @@ class TraderMonitor {
         logger.warn('合约监控器未初始化，跳过启动');
       }
 
-      // 启动现货转账监听器
+      // 启动现货转账监听器（RPC版本）
       if (this.spotMonitor) {
         try {
-          logger.info('开始启动现货转账监听器...');
+          logger.info('开始启动RPC现货转账监听器...');
           
           await Promise.race([
             this.spotMonitor.start(),
             new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('现货监听器启动超时')), 120000) // 2分钟超时
+              setTimeout(() => reject(new Error('RPC现货监听器启动超时')), 60000) // 1分钟超时
             )
           ]);
           
-          logger.info('✅ 现货转账监听器启动完成', {
-            addressCount: config.monitoring.addresses.length
+          logger.info('✅ RPC现货转账监听器启动完成', {
+            addressCount: config.monitoring.addresses.length,
+            strategy: 'RPC轮询',
+            stats: this.spotMonitor.getStats()
           });
         } catch (error) {
-          logger.error('现货转账监听器启动失败:', error);
+          logger.error('RPC现货转账监听器启动失败:', error);
           // 不抛出错误，继续运行其他功能
         }
       } else {
-        logger.warn('现货监听器未初始化，跳过启动');
+        logger.warn('RPC现货监听器未初始化，跳过启动');
       }
 
       this.isRunning = true;

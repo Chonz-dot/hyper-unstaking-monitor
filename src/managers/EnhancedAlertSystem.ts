@@ -223,9 +223,11 @@ export class EnhancedAlertSystem {
 
         // 🎯 交易详情
         message += `🎯 **交易详情**\n`;
+        message += `👤 **交易员**: ${trader.label} (${trader.address.slice(0, 6)}...${trader.address.slice(-4)})\n`;
         message += `💰 **资产**: ${asset} | ${sideEmoji} **方向**: ${directionText} | 📊 **规模**: ${size}\n`;
         message += `💵 **价格**: $${price.toLocaleString()} | 🏦 **价值**: $${notional.toLocaleString()}\n`;
-        message += `⏰ **时间**: ${new Date(event.timestamp).toISOString().replace('T', ' ').slice(0, 19)} UTC\n\n`;
+        message += `⏰ **时间**: ${new Date(event.timestamp).toISOString().replace('T', ' ').slice(0, 19)} UTC\n`;
+        message += `🔍 **交易哈希**: https://app.hyperliquid.xyz/explorer/tx/${event.hash}\n\n`;
 
         // 📋 持仓变化分析
         message += `📋 **持仓变化分析**\n`;
@@ -430,10 +432,12 @@ export class EnhancedAlertSystem {
 
         // 🎯 交易详情
         message += `🎯 **交易详情**\n`;
+        message += `👤 **交易员**: ${trader.label} (${trader.address.slice(0, 6)}...${trader.address.slice(-4)})\n`;
         message += `💰 **资产**: ${asset} | ${sideEmoji} **方向**: ${directionText} | 📊 **规模**: ${size}\n`;
         message += `💵 **价格**: $${price.toLocaleString()} | 🏦 **价值**: $${notional.toLocaleString()}\n`;
         message += `🔄 **操作**: ${operationDescription}\n`;
         message += `⏰ **时间**: ${new Date(event.timestamp).toISOString().replace('T', ' ').slice(0, 19)} UTC\n`;
+        message += `🔍 **交易哈希**: https://app.hyperliquid.xyz/explorer/tx/${event.hash}\n`;
 
         // 如果有持仓变化信息，显示它
         if (event.positionChange) {
