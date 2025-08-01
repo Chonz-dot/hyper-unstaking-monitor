@@ -131,13 +131,32 @@ export class TradeClassificationEngine {
                         continue;
                     }
                     
-                    // 所有重试都失败了，使用后备分类
-                    logger.warn(`🔄 所有重试失败，使用后备分类`, {
+                    // 所有重试都失败了，使用特征分析方法
+                    logger.info(`🧠 使用交易特征分析方法`, {
                         trader: trader.label,
                         asset,
                         finalReason: lastError
                     });
-                    return this.fallbackClassification(fill, trader, beforePosition, afterPosition);
+                    
+                    const featureClassification = this.classifyByTradeCharacteristics(fill, beforePosition, afterPosition);
+                    const enhancedEvent = this.createEnhancedEventFromFeatures(
+                        fill,
+                        trader,
+                        featureClassification,
+                        beforePosition,
+                        afterPosition
+                    );
+                    
+                    logger.info(`✅ 特征分析分类完成`, {
+                        trader: trader.label,
+                        asset,
+                        type: featureClassification.eventType,
+                        description: featureClassification.description,
+                        confidence: featureClassification.confidence,
+                        notional: `$${(fillSize * price).toFixed(2)}`
+                    });
+                    
+                    return enhancedEvent;
                 }
                 
                 // 验证成功，更新统计信息
@@ -239,6 +258,97 @@ export class TradeClassificationEngine {
                 entryPrice: afterPosition.entryPrice,
                 unrealizedPnl: 0,
                 notionalValue: beforeSize * afterPosition.entryPrice
+            };
+        }
+    }
+
+    /**
+     * 基于交易特征的智能分类（新方法）
+     */
+    private classifyByTradeCharacteristics(
+        fill: any, 
+        beforePosition: AssetPosition | null, 
+        afterPosition: AssetPosition | null
+    ): { eventType: ContractEvent['eventType'], description: string, confidence: 'high' | 'medium' | 'low' } {
+        const fillSize = Math.abs(parseFloat(fill.sz || '0'));
+        const fillSide = fill.side === 'B' ? 'long' : 'short';
+        const isCrossed = fill.crossed; // true = 吃单, false = 挂单
+        
+        logger.debug(`🧠 基于交易特征分类`, {
+            fillSize,
+            fillSide,
+            isCrossed,
+            beforeSize: beforePosition?.size || 0,
+            afterSize: afterPosition?.size || 0,
+            beforeSide: beforePosition?.side || 'none',
+            afterSide: afterPosition?.side || 'none'
+        });
+        
+        // 策略1: 如果持仓真的发生了变化，使用持仓变化逻辑
+        if (beforePosition && afterPosition) {
+            const sizeChange = afterPosition.size - beforePosition.size;
+            const sideChanged = beforePosition.side !== afterPosition.side;
+            
+            if (Math.abs(sizeChange) > fillSize * 0.1 || sideChanged) {
+                // 有明显持仓变化，使用传统逻辑
+                if (beforePosition.size === 0) {
+                    return {
+                        eventType: fillSide === 'long' ? 'position_open_long' : 'position_open_short',
+                        description: `${fillSide === 'long' ? '开多仓' : '开空仓'}`,
+                        confidence: 'high'
+                    };
+                } else if (afterPosition.size === 0) {
+                    return {
+                        eventType: 'position_close',
+                        description: '平仓',
+                        confidence: 'high'
+                    };
+                } else if (sideChanged) {
+                    return {
+                        eventType: 'position_reverse',
+                        description: `反向操作 (${beforePosition.side} → ${afterPosition.side})`,
+                        confidence: 'medium'
+                    };
+                } else if (sizeChange > 0) {
+                    return {
+                        eventType: 'position_increase',
+                        description: '加仓',
+                        confidence: 'medium'
+                    };
+                } else {
+                    return {
+                        eventType: 'position_decrease',
+                        description: '减仓',
+                        confidence: 'medium'
+                    };
+                }
+            }
+        }
+        
+        // 策略2: 持仓没变化，基于交易特征推断
+        if (!beforePosition || beforePosition.size === 0) {
+            // 之前无持仓，这应该是开仓
+            return {
+                eventType: fillSide === 'long' ? 'position_open_long' : 'position_open_short',
+                description: `${fillSide === 'long' ? '开多仓' : '开空仓'} (特征分析)`,
+                confidence: 'high'
+            };
+        }
+        
+        // 策略3: 有持仓但没变化 - 可能是对冲交易或开平同时
+        if (beforePosition.side === fillSide) {
+            // 同方向交易，可能是加仓
+            return {
+                eventType: 'position_increase',
+                description: `加${fillSide}仓 (可能对冲)`,
+                confidence: 'low'
+            };
+        } else {
+            // 反方向交易，可能是平仓
+            return {
+                eventType: 'position_decrease',
+                description: `减${beforePosition.side}仓 (可能对冲)`,
+                confidence: 'low'
             };
         }
     }
@@ -416,6 +526,71 @@ export class TradeClassificationEngine {
     }
 
     /**
+     * 基于特征分析创建增强事件
+     */
+    private createEnhancedEventFromFeatures(
+        fill: any,
+        trader: ContractTrader,
+        classification: { eventType: ContractEvent['eventType'], description: string, confidence: 'high' | 'medium' | 'low' },
+        beforePosition: AssetPosition | null,
+        afterPosition: AssetPosition | null
+    ): EnhancedContractEvent {
+        const fillSize = Math.abs(parseFloat(fill.sz || '0'));
+        const price = parseFloat(fill.px || '0');
+        const fillSide = fill.side === 'B' ? 'long' : 'short';
+        
+        let blockTime: number;
+        if (fill.time) {
+            blockTime = fill.time > 1e12 ? Math.floor(fill.time / 1000) : Math.floor(fill.time);
+        } else {
+            blockTime = Math.floor(Date.now() / 1000);
+        }
+        
+        return {
+            timestamp: Date.now(),
+            address: trader.address,
+            eventType: classification.eventType,
+            asset: fill.coin,
+            size: fillSize.toString(),
+            price: price.toString(),
+            side: fillSide,
+            hash: fill.hash || fill.tid || `feature_${Date.now()}_${fill.coin}`,
+            blockTime,
+            
+            // 增强字段
+            classification: {
+                type: this.mapEventTypeToClassificationType(classification.eventType),
+                description: classification.description,
+                confidence: classification.confidence
+            },
+            positionBefore: beforePosition,
+            positionAfter: afterPosition,
+            positionChange: {
+                sizeChange: afterPosition && beforePosition ? afterPosition.size - beforePosition.size : 0,
+                sideChanged: afterPosition && beforePosition ? afterPosition.side !== beforePosition.side : false
+            },
+            
+            metadata: {
+                notionalValue: (fillSize * price).toString(),
+                originalAsset: fill.coin,
+                traderLabel: trader.label,
+                monitoredAddress: trader.address,
+                actualFillUser: (fill as any).user,
+                oid: fill.oid,
+                crossed: fill.crossed,
+                source: 'feature-analysis',
+                isRealTime: false,
+                fillType: fill.side,
+                originalFill: fill,
+                
+                // 特征分析特定的元数据
+                analysisMethod: 'trade-characteristics',
+                featureConfidence: classification.confidence
+            }
+        };
+    }
+
+    /**
      * 创建增强的交易事件
      */
     private createEnhancedEvent(
@@ -545,6 +720,22 @@ export class TradeClassificationEngine {
                 originalFill: fill
             }
         };
+    }
+
+    /**
+     * 映射事件类型到分类类型
+     */
+    private mapEventTypeToClassificationType(eventType: string): PositionChangeType | 'UNKNOWN' | 'FALLBACK' {
+        const mapping: Record<string, PositionChangeType> = {
+            'position_open_long': 'OPEN_LONG',
+            'position_open_short': 'OPEN_SHORT',
+            'position_close': 'CLOSE_POSITION',
+            'position_increase': 'INCREASE_POSITION',
+            'position_decrease': 'DECREASE_POSITION',
+            'position_reverse': 'REVERSE_POSITION'
+        };
+        
+        return mapping[eventType] || 'UNKNOWN';
     }
 
     /**
