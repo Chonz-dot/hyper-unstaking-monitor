@@ -2,11 +2,6 @@
 // Promise.withResolvers 需要 Node.js v22+，为v20提供polyfill支持
 import './polyfills';
 
-import HyperliquidMonitor from './services/hyperliquid-monitor';
-import BatchedHyperliquidMonitor from './services/hyperliquid-monitor';
-import { WebSocketContractMonitor } from './services/webSocketContractMonitor';
-import PooledWebSocketContractMonitor from './services/pooledWebSocketContractMonitor';
-import RobustWebSocketContractMonitor from './services/robustWebSocketContractMonitor';
 import RpcContractMonitor from './services/rpcContractMonitor';
 import HybridRpcContractMonitor from './services/hybridRpcContractMonitor';
 import PureRpcContractMonitor from './services/pureRpcContractMonitor';
@@ -15,14 +10,13 @@ import CacheManager from './cache';
 import WebhookNotifier from './webhook';
 import logger from './logger';
 import config from './config';
-import { MonitorEvent, ContractEvent, ContractTrader } from './types';
+import { ContractEvent, ContractTrader } from './types';
 
 // 全局系统启动时间
 export const SYSTEM_START_TIME = Date.now();
 
-class HypeUnstakingMonitor {
-  private hyperliquidMonitor: BatchedHyperliquidMonitor;
-  private contractMonitor?: WebSocketContractMonitor | PooledWebSocketContractMonitor | RobustWebSocketContractMonitor | RpcContractMonitor | HybridRpcContractMonitor | PureRpcContractMonitor;
+class TraderMonitor {
+  private contractMonitor?: RpcContractMonitor | HybridRpcContractMonitor | PureRpcContractMonitor;
   private alertEngine: AlertEngine;
   private cache: CacheManager;
   private notifier: WebhookNotifier;
@@ -34,7 +28,6 @@ class HypeUnstakingMonitor {
     this.cache = new CacheManager();
     this.notifier = new WebhookNotifier();
     this.alertEngine = new AlertEngine(this.cache, this.notifier);
-    this.hyperliquidMonitor = new BatchedHyperliquidMonitor(this.handleEvent.bind(this));
 
     // 如果启用了合约监控，初始化合约监控器
     logger.info('🔧 检查合约监控配置', {
@@ -53,16 +46,14 @@ class HypeUnstakingMonitor {
         envValue: process.env.CONTRACT_MONITOR_TYPE,
         configValue: config.contractMonitoring.monitorType,
         actualMonitorType: monitorType,
-        selectedMonitor: monitorType === 'pooled' ? 'PooledWebSocketContractMonitor' : 
-                        monitorType === 'robust' ? 'RobustWebSocketContractMonitor' : 
-                        monitorType === 'rpc' ? 'RpcContractMonitor' :
+        selectedMonitor: monitorType === 'rpc' ? 'RpcContractMonitor' :
                         monitorType === 'hybrid' ? 'HybridRpcContractMonitor' :
-                        monitorType === 'pure-rpc' ? 'PureRpcContractMonitor' :
-                        'WebSocketContractMonitor'
+                        'PureRpcContractMonitor'
       });
       
       switch (monitorType) {
         case 'pure-rpc':
+        default:
           this.contractMonitor = new PureRpcContractMonitor(
             config.contractMonitoring.traders,
             config.contractMonitoring.minNotionalValue
@@ -80,30 +71,11 @@ class HypeUnstakingMonitor {
             config.contractMonitoring.minNotionalValue
           );
           break;
-        case 'pooled':
-          this.contractMonitor = new PooledWebSocketContractMonitor(
-            config.contractMonitoring.traders,
-            config.contractMonitoring.minNotionalValue
-          );
-          break;
-        case 'robust':
-          this.contractMonitor = new RobustWebSocketContractMonitor(
-            config.contractMonitoring.traders,
-            config.contractMonitoring.minNotionalValue
-          );
-          break;
-        case 'single':
-        default:
-          this.contractMonitor = new WebSocketContractMonitor(
-            config.contractMonitoring.traders,
-            config.contractMonitoring.minNotionalValue
-          );
-          break;
       }
 
       // 监听合约事件
       this.contractMonitor.on('contractEvent', this.handleContractEvent.bind(this));
-      logger.info('🎯 WebSocket合约监控器初始化完成', { type: monitorType });
+      logger.info('🎯 RPC合约监控器初始化完成', { type: monitorType });
     } else {
       logger.warn('❌ 合约监控未启用，请检查 CONTRACT_MONITORING_ENABLED 环境变量');
       logger.warn('当前环境变量值:', {
@@ -138,9 +110,6 @@ class HypeUnstakingMonitor {
         lastUpdate: Date.now(),
       });
 
-      // 启动Hyperliquid监控
-      this.hyperliquidMonitor.start();
-
       // 启动合约监控（如果启用）
       logger.info('检查合约监控器状态...', {
         contractMonitorExists: !!this.contractMonitor,
@@ -150,7 +119,7 @@ class HypeUnstakingMonitor {
 
       if (this.contractMonitor) {
         try {
-          logger.info('开始启动WebSocket合约监控器...');
+          logger.info('开始启动RPC合约监控器...');
           
           // 添加超时机制，防止启动卡住
           await Promise.race([
@@ -160,9 +129,9 @@ class HypeUnstakingMonitor {
             )
           ]);
           
-          logger.info('✅ WebSocket合约监控启动完成', this.contractMonitor.getStats());
+          logger.info('✅ RPC合约监控启动完成', this.contractMonitor.getStats());
         } catch (error) {
-          logger.error('WebSocket合约监控启动失败:', error);
+          logger.error('RPC合约监控启动失败:', error);
           // 不抛出错误，继续运行其他功能
         }
       } else {
@@ -171,17 +140,11 @@ class HypeUnstakingMonitor {
 
       this.isRunning = true;
 
-      logger.info('HYPE解锁监控系统启动成功', {
+      logger.info('交易员监控系统启动成功', {
         systemStartTime: new Date(SYSTEM_START_TIME).toISOString(),
-        addressCount: config.monitoring.addresses.length,
-        singleThreshold: config.monitoring.singleThreshold,
-        cumulative24hThreshold: config.monitoring.cumulative24hThreshold,
-        timeWindow: '24小时滚动窗口（从启动时间开始）',
-        monitoringType: 'BatchedWebSocket',
-        batchInfo: this.hyperliquidMonitor.getStatus(),
         contractMonitoring: {
           enabled: config.contractMonitoring.enabled,
-          type: 'WebSocket-userEvents',
+          type: 'RPC-轮询',
           traders: this.contractMonitor?.getStats()
         }
       });
@@ -215,22 +178,6 @@ class HypeUnstakingMonitor {
     }
   }
 
-  private async handleEvent(event: MonitorEvent): Promise<void> {
-    try {
-      // 更新最后更新时间
-      await this.cache.updateMonitoringStatus({
-        startTime: this.startTime,
-        lastUpdate: Date.now(),
-      });
-
-      // 处理转账事件
-      await this.alertEngine.processEvent(event);
-
-    } catch (error) {
-      logger.error('处理监控事件失败:', error, { event });
-    }
-  }
-
   private async handleContractEvent(event: ContractEvent, trader: ContractTrader): Promise<void> {
     try {
       logger.info('收到合约事件', {
@@ -254,9 +201,6 @@ class HypeUnstakingMonitor {
 
   private async cleanup(): Promise<void> {
     try {
-      // 停止Hyperliquid监控
-      await this.hyperliquidMonitor.stop();
-
       // 停止合约监控
       if (this.contractMonitor) {
         await this.contractMonitor.stop();
@@ -296,7 +240,6 @@ class HypeUnstakingMonitor {
     isRunning: boolean;
     startTime: number;
     uptime: number;
-    hyperliquidStatus: any;
     contractStats: any;
     stats: any;
   }> {
@@ -307,7 +250,6 @@ class HypeUnstakingMonitor {
       isRunning: this.isRunning,
       startTime: this.startTime,
       uptime,
-      hyperliquidStatus: this.hyperliquidMonitor.getStatus(),
       contractStats: this.contractMonitor?.getStats() || null,
       stats: await this.alertEngine.getStats(),
     };
@@ -325,7 +267,7 @@ class HypeUnstakingMonitor {
 }
 
 // 创建监控实例
-const monitor = new HypeUnstakingMonitor();
+const monitor = new TraderMonitor();
 
 // 处理进程信号
 process.on('SIGINT', () => monitor.gracefulShutdown());
@@ -352,10 +294,9 @@ async function main() {
       const status = await monitor.getSystemStatus();
       logger.info('系统状态报告', {
         运行时长: Math.floor(status.uptime / 1000) + '秒',
-        Hyperliquid连接: status.hyperliquidStatus.isRunning ? '正常' : '断开',
-        订阅数量: status.hyperliquidStatus.subscriptionsCount,
-        监控地址: status.stats.totalAddresses,
-        活跃规则: status.stats.activeRules,
+        RPC监控: status.contractStats?.isRunning ? '正常' : '断开',
+        监控交易员: status.contractStats?.traders || 0,
+        成功率: status.contractStats?.successRate || '0%',
       });
     }, 300000); // 每5分钟输出一次状态
 
@@ -374,4 +315,4 @@ if (require.main === module) {
 }
 
 export default monitor;
-export { HypeUnstakingMonitor };
+export { TraderMonitor };

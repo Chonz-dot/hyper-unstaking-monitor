@@ -191,8 +191,9 @@ export class RpcContractMonitor extends EventEmitter {
             // 检查请求参数
             const requestParams = {
                 user: trader.address as `0x${string}`,
-                startTime: Math.floor(startTime / 1000), // 转换为秒
-                endTime: Math.floor(endTime / 1000)
+                startTime: startTime, // 保持毫秒时间戳
+                endTime: endTime,
+                aggregateByTime: true // 启用时间聚合，合并部分成交
             };
 
             logger.debug(`📤 API请求参数 ${trader.label}`, requestParams);
@@ -240,8 +241,8 @@ export class RpcContractMonitor extends EventEmitter {
                 responseBody: error.responseBody,
                 requestParams: {
                     user: trader.address,
-                    startTime: Math.floor(startTime / 1000),
-                    endTime: Math.floor(endTime / 1000)
+                    startTime: startTime,
+                    endTime: endTime
                 }
             });
 

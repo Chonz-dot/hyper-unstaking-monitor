@@ -180,8 +180,9 @@ export class HybridRpcContractMonitor extends EventEmitter {
             // 使用官方API获取填充数据
             const fills = await this.infoClient.userFillsByTime({
                 user: trader.address as `0x${string}`,
-                startTime: Math.floor(startTime / 1000),
-                endTime: Math.floor(endTime / 1000)
+                startTime: startTime, // 保持毫秒时间戳
+                endTime: endTime,     // 保持毫秒时间戳
+                aggregateByTime: true // 启用时间聚合，合并部分成交
             });
 
             // 详细记录API响应

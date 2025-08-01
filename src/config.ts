@@ -58,7 +58,7 @@ const CONTRACT_TRADERS: ContractTrader[] = [
   { address: '0xa04a4b7b7c37dbd271fdc57618e9cb9836b250bf', label: '交易员2', description: 'hyperdash交易员', isActive: true },
   { address: '0xb8b9e3097c8b1dddf9c5ea9d48a7ebeaf09d67d2', label: '交易员3', description: 'hyperdash交易员', isActive: true },
   { address: '0xd5ff5491f6f3c80438e02c281726757baf4d1070', label: '交易员4', description: 'hyperdash交易员', isActive: true },
-  { address: '0x31ca8395cf837de08b24da3f660e77761dfb974b', label: 'test', description: 'hyperdash交易员', isActive: true },
+  { address: '0x45090576dEBb996eeFe85C1269E8772F8B08025A', label: 'test', description: 'hyperdash交易员', isActive: true },
 ];
 
 export const config: Config = {
