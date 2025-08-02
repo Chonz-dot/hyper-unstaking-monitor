@@ -278,20 +278,27 @@ export class EnhancedAlertSystem {
             return false;
         }
 
+        // 对于大额交易，即使分类为NO_CHANGE也应该进行分析
+        const isLargeTransaction = notionalValue >= 10000; // $10,000以上的大额交易
+        
         // 所有有意义的持仓变化都应该进行分析
         const isMeaningfulOperation = event.eventType !== 'no_change' && 
                                     event.eventType !== 'unknown' &&
                                     (event.classification && 
-                                     event.classification.type !== 'NO_CHANGE' && 
                                      event.classification.type !== 'UNKNOWN' &&
                                      event.classification.type !== 'FALLBACK');
 
-        if (!isMeaningfulOperation) {
+        // 对于大额交易，即使是NO_CHANGE也值得分析
+        const shouldAnalyzeAnyway = isLargeTransaction && event.classification?.type === 'NO_CHANGE';
+
+        if (!isMeaningfulOperation && !shouldAnalyzeAnyway) {
             this.stats.analysisSkipped++;
-            logger.debug(`🔄 非有意义操作，跳过分析`, {
+            logger.debug(`🔄 跳过分析`, {
                 trader: trader.label,
                 eventType: event.eventType,
-                classificationType: event.classification?.type || 'unknown'
+                classificationType: event.classification?.type || 'unknown',
+                notional: notionalValue,
+                reason: isLargeTransaction ? '大额NO_CHANGE但未强制分析' : '非有意义操作'
             });
             return false;
         }
@@ -393,6 +400,17 @@ export class EnhancedAlertSystem {
      */
     private generateOperationDescription(event: EnhancedContractEvent): string {
         if (event.classification && event.classification.description) {
+            // 对于NO_CHANGE，提供更明确的描述
+            if (event.classification.type === 'NO_CHANGE') {
+                const notional = parseFloat(event.metadata?.notionalValue || '0');
+                if (notional >= 100000) {
+                    return '大额交易活动'; // >$10万
+                } else if (notional >= 10000) {
+                    return '中额交易活动'; // >$1万
+                } else {
+                    return '交易活动';
+                }
+            }
             return event.classification.description;
         }
 
@@ -448,6 +466,18 @@ export class EnhancedAlertSystem {
             }
             if (event.positionChange.sideChanged) {
                 message += `🔄 **方向改变**: 是\n`;
+            }
+        }
+
+        // 对于NO_CHANGE但有大额交易的情况，添加说明
+        if (event.classification?.type === 'NO_CHANGE') {
+            const notional = parseFloat(event.metadata?.notionalValue || '0');
+            message += `\n💡 **交易说明**\n`;
+            if (notional >= 100000) {
+                message += `🔍 **分析**: 检测到$${(notional/1000).toFixed(0)}K大额交易，但持仓净变化为零\n`;
+                message += `📊 **可能原因**: 同时开平仓、部分平仓后加仓、或复杂交易组合\n`;
+            } else {
+                message += `🔍 **分析**: 交易活动未导致持仓净变化\n`;
             }
         }
 

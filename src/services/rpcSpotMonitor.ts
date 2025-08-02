@@ -21,6 +21,7 @@ export class RpcSpotMonitor extends EventEmitter {
     private lastProcessedTime = new Map<string, number>();
     private processedTransfers = new Set<string>(); // 使用hash避免重复
     private readonly MAX_CACHE_SIZE = 5000;
+    private startupTime: number; // 启动时间戳，用于过滤历史数据
     
     // 统计信息
     private stats = {
@@ -37,6 +38,7 @@ export class RpcSpotMonitor extends EventEmitter {
         super();
         this.addresses = addresses.filter(addr => addr.isActive);
         this.stats.addressesMonitored = this.addresses.length;
+        this.startupTime = Date.now(); // 记录启动时间
         
         // 初始化Info客户端
         const transport = new hl.HttpTransport({
@@ -48,7 +50,8 @@ export class RpcSpotMonitor extends EventEmitter {
         logger.info('🔧 RPC现货监听器初始化完成', {
             activeAddresses: this.addresses.length,
             pollingInterval: `${this.POLLING_INTERVAL / 1000}s`,
-            strategy: 'HTTP轮询 + 账本更新查询'
+            strategy: 'HTTP轮询 + 账本更新查询',
+            startupTime: new Date(this.startupTime).toISOString()
         });
     }
 
@@ -83,6 +86,9 @@ export class RpcSpotMonitor extends EventEmitter {
                 strategy: 'rpc-polling',
                 pollingInterval: `${this.POLLING_INTERVAL / 1000}s`
             });
+
+            // 启动定期状态报告
+            this.startStatusReporting();
 
         } catch (error) {
             logger.error('❌ RPC现货监听器启动失败:', error);
@@ -145,6 +151,39 @@ export class RpcSpotMonitor extends EventEmitter {
 
         // 立即开始第一次轮询
         setTimeout(pollAddress, Math.random() * 5000); // 随机延迟0-5秒，避免所有地址同时查询
+        
+        logger.info(`🔄 开始轮询${address.label}`, {
+            address: address.address.slice(0, 6) + '...' + address.address.slice(-4),
+            pollingInterval: `${this.POLLING_INTERVAL / 1000}s`
+        });
+    }
+
+    /**
+     * 启动定期状态报告
+     */
+    private startStatusReporting(): void {
+        const reportInterval = setInterval(() => {
+            if (!this.isRunning) {
+                clearInterval(reportInterval);
+                return;
+            }
+
+            const stats = this.getStats();
+            const timeSinceLastPoll = Date.now() - this.stats.lastSuccessfulPoll;
+            
+            logger.info('📊 RPC现货监听器状态报告', {
+                uptime: `${stats.uptime}s`,
+                isHealthy: timeSinceLastPoll < 120000, // 2分钟内有成功轮询
+                totalRequests: this.stats.totalRequests,
+                totalErrors: this.stats.totalErrors,
+                totalEvents: this.stats.totalEvents,
+                transfersProcessed: this.stats.transfersProcessed,
+                successRate: stats.successRate,
+                lastSuccessfulPoll: timeSinceLastPoll < 60000 ? `${Math.floor(timeSinceLastPoll / 1000)}s ago` : 'Over 1 min ago',
+                cacheSize: stats.cacheSize,
+                addressesMonitored: this.stats.addressesMonitored
+            });
+        }, 5 * 60 * 1000); // 每5分钟报告一次
     }
 
     /**
@@ -165,7 +204,7 @@ export class RpcSpotMonitor extends EventEmitter {
             });
 
             if (ledgerUpdates && ledgerUpdates.length > 0) {
-                logger.debug(`📊 ${address.label}获取到${ledgerUpdates.length}个账本更新`, {
+                logger.info(`📊 ${address.label}获取到${ledgerUpdates.length}个账本更新`, {
                     timeRange: `${new Date(startTime).toISOString()} - ${new Date(endTime).toISOString()}`
                 });
 
@@ -173,6 +212,11 @@ export class RpcSpotMonitor extends EventEmitter {
                 for (const update of ledgerUpdates) {
                     await this.processLedgerUpdate(update, address);
                 }
+            } else {
+                // 即使没有更新也记录，证明轮询在工作
+                logger.debug(`📋 ${address.label}无新的账本更新`, {
+                    timeRange: `${new Date(startTime).toISOString()} - ${new Date(endTime).toISOString()}`
+                });
             }
 
             // 更新最后处理时间
@@ -183,6 +227,19 @@ export class RpcSpotMonitor extends EventEmitter {
             logger.error(`❌ 查询${address.label}账本更新失败:`, error);
             throw error;
         }
+        
+        // 记录轮询活动（每小时记录一次以证明程序在运行）
+        const now = Date.now();
+        const lastHeartbeat = this.lastProcessedTime.get(`${address.address}_heartbeat`) || 0;
+        if (now - lastHeartbeat > 3600000) { // 1小时
+            logger.info(`💓 ${address.label}轮询心跳`, {
+                lastCheck: new Date(endTime).toISOString(),
+                noActivitySince: this.lastProcessedTime.get(address.address) 
+                    ? new Date(this.lastProcessedTime.get(address.address)!).toISOString() 
+                    : '系统启动'
+            });
+            this.lastProcessedTime.set(`${address.address}_heartbeat`, now);
+        }
     }
 
     /**
@@ -190,6 +247,16 @@ export class RpcSpotMonitor extends EventEmitter {
      */
     private async processLedgerUpdate(update: any, address: WatchedAddress): Promise<void> {
         try {
+            // 🔍 检查是否是启动前的历史数据
+            if (update.time && update.time < this.startupTime) {
+                logger.debug(`⏭️ 跳过启动前的历史数据`, {
+                    address: address.label,
+                    updateTime: new Date(update.time).toISOString(),
+                    startupTime: new Date(this.startupTime).toISOString()
+                });
+                return; // 跳过历史数据
+            }
+
             // 生成唯一标识，避免重复处理
             const updateHash = `${address.address}_${update.time}_${update.hash || update.delta?.USDC || update.delta?.coin}`;
             
@@ -237,14 +304,26 @@ export class RpcSpotMonitor extends EventEmitter {
      * 判断是否是转账相关的更新
      */
     private isTransferUpdate(update: any): boolean {
-        // 检查更新类型，过滤出转账相关的
-        const transferTypes = ['deposit', 'withdraw', 'transfer', 'internalTransfer', 'spotGenesis'];
+        if (!update.delta) return false;
         
-        if (update.delta && Object.keys(update.delta).length > 0) {
-            return true; // 有余额变化
+        // 检查更新类型 - 扩展的转账类型识别
+        const transferTypes = [
+            'spotTransfer',     // 现货转账
+            'deposit',          // 存款
+            'withdraw',         // 提款
+            'internalTransfer', // 内部转账
+            'cStakingTransfer', // 质押转账
+            'accountClassTransfer', // 账户类别转账
+            'subAccountTransfer'    // 子账户转账
+        ];
+        
+        // 检查delta.type
+        if (update.delta.type && transferTypes.includes(update.delta.type)) {
+            return true;
         }
         
-        if (update.type && transferTypes.includes(update.type)) {
+        // 检查传统的余额变化格式
+        if (update.delta.USDC || update.delta.coin) {
             return true;
         }
         
@@ -259,12 +338,71 @@ export class RpcSpotMonitor extends EventEmitter {
             let amount = '0';
             let asset = 'USDC';
             let eventType: MonitorEvent['eventType'] = 'transfer_in';
+            let usdcValue = 0;
 
-            // 解析余额变化
+            // 解析余额变化 - 改进的解析逻辑
             if (update.delta) {
-                if (update.delta.USDC) {
+                // 1. 处理现货转账
+                if (update.delta.type === 'spotTransfer') {
+                    asset = update.delta.token || 'UNKNOWN';
+                    amount = Math.abs(parseFloat(update.delta.amount || '0')).toString();
+                    usdcValue = parseFloat(update.delta.usdcValue || '0');
+                    
+                    // 判断转账方向
+                    if (update.delta.user === address.address) {
+                        eventType = 'transfer_out'; // 该地址是发送方
+                    } else if (update.delta.destination === address.address) {
+                        eventType = 'transfer_in';  // 该地址是接收方
+                    }
+                    
+                    logger.debug(`🔄 现货转账解析`, {
+                        asset, amount, usdcValue, eventType,
+                        user: update.delta.user,
+                        destination: update.delta.destination,
+                        address: address.address
+                    });
+                }
+                // 2. 处理存取款
+                else if (update.delta.type === 'deposit') {
+                    asset = 'USDC';
+                    amount = Math.abs(parseFloat(update.delta.usdc || '0')).toString();
+                    usdcValue = parseFloat(amount);
+                    eventType = 'deposit';
+                }
+                else if (update.delta.type === 'withdraw') {
+                    asset = 'USDC';
+                    amount = Math.abs(parseFloat(update.delta.usdc || '0')).toString();
+                    usdcValue = parseFloat(amount);
+                    eventType = 'withdraw';
+                }
+                // 3. 处理质押转账
+                else if (update.delta.type === 'cStakingTransfer') {
+                    asset = update.delta.token || 'HYPE';
+                    amount = Math.abs(parseFloat(update.delta.amount || '0')).toString();
+                    eventType = update.delta.isDeposit ? 'deposit' : 'withdraw';
+                    
+                    // 估算HYPE的价值（使用历史价格或固定估算）
+                    if (asset === 'HYPE') {
+                        usdcValue = parseFloat(amount) * 40; // 估算$40/HYPE
+                    }
+                }
+                // 4. 处理内部转账
+                else if (update.delta.type === 'internalTransfer') {
+                    asset = 'USDC';
+                    amount = Math.abs(parseFloat(update.delta.usdc || '0')).toString();
+                    usdcValue = parseFloat(amount);
+                    
+                    if (update.delta.user === address.address) {
+                        eventType = 'transfer_out';
+                    } else {
+                        eventType = 'transfer_in';
+                    }
+                }
+                // 5. 兜底：处理传统的USDC/coin格式
+                else if (update.delta.USDC) {
                     amount = Math.abs(parseFloat(update.delta.USDC)).toString();
                     asset = 'USDC';
+                    usdcValue = parseFloat(amount);
                     eventType = parseFloat(update.delta.USDC) > 0 ? 'transfer_in' : 'transfer_out';
                 } else if (update.delta.coin) {
                     // 其他代币
@@ -275,6 +413,12 @@ export class RpcSpotMonitor extends EventEmitter {
                         eventType = parseFloat(coinDelta[1] as string) > 0 ? 'transfer_in' : 'transfer_out';
                     }
                 }
+            }
+
+            // 检查是否达到阈值 - 使用USDC价值或估算价值
+            const notionalValue = usdcValue || parseFloat(amount);
+            if (notionalValue < 100) {
+                return null; // 小于$100阈值
             }
 
             // 解析时间
@@ -293,6 +437,8 @@ export class RpcSpotMonitor extends EventEmitter {
                     source: 'rpc-ledger',
                     addressLabel: address.label,
                     unlockAmount: address.unlockAmount,
+                    usdcValue: usdcValue.toString(),
+                    transferType: update.delta?.type || 'unknown',
                     delta: update.delta
                 }
             };

@@ -208,26 +208,27 @@ export class WebhookNotifier {
   }
 
   private async makeContractRequest(webhookUrl: string, alert: ContractWebhookAlert): Promise<void> {
-    // 🔍 检查是否是增强告警
+    // 🔍 检查是否有格式化消息（增强告警或基础告警都可能有）
     const enhancedAlert = alert as any;
-    if (enhancedAlert.enhanced && enhancedAlert.formattedMessage) {
-      logger.info('📨 发送增强告警消息', {
+    if (enhancedAlert.formattedMessage) {
+      const alertType = enhancedAlert.enhanced ? '增强告警' : '基础告警';
+      logger.info(`📨 发送${alertType}消息`, {
         trader: alert.traderLabel,
         asset: alert.asset,
-        enhanced: true,
+        enhanced: enhancedAlert.enhanced || false,
         messageLength: enhancedAlert.formattedMessage.length,
-        hasFormattedMessage: !!enhancedAlert.formattedMessage
+        hasFormattedMessage: true
       });
 
-      // 直接发送增强消息
-      const enhancedPayload = {
+      // 直接发送格式化消息
+      const formattedPayload = {
         text: enhancedAlert.formattedMessage,
-        username: 'Trading Analysis',
-        icon_emoji: ':microscope:',
+        username: enhancedAlert.enhanced ? 'Trading Analysis' : 'Trade Monitor',
+        icon_emoji: enhancedAlert.enhanced ? ':microscope:' : ':chart_with_upwards_trend:',
         parseUrls: false
       };
 
-      const response = await axios.post(webhookUrl, enhancedPayload, {
+      const response = await axios.post(webhookUrl, formattedPayload, {
         timeout: this.timeout,
         headers: { 'Content-Type': 'application/json' }
       });
@@ -235,7 +236,7 @@ export class WebhookNotifier {
       if (response.status >= 400) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-      return;
+      return; // 使用格式化消息，直接返回
     }
 
     // 🔧 原有的基础告警格式化逻辑
