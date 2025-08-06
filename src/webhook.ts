@@ -39,6 +39,16 @@ export class WebhookNotifier {
       return;
     }
 
+    // 🔍 调试日志：webhook发送详情
+    logger.info('🔍 [调试] 准备发送合约webhook', {
+      traderLabel: alert.traderLabel || 'unknown',
+      alertType: alert.alertType,
+      asset: alert.asset,
+      enhanced: (alert as any).enhanced || false,
+      hasFormattedMessage: !!(alert as any).formattedMessage,
+      webhookType: (alert as any).enhanced ? 'Trading Analysis' : 'Trade Monitor'
+    });
+
     await this.sendWebhook(this.contractWebhookUrl, alert, 'contract');
   }
 
@@ -111,25 +121,25 @@ export class WebhookNotifier {
     // 主题化的警报级别和图标系统 - 与合约风格统一
     let alertLevel = 'LOW';
     let alertEmoji = '💎'; // 钻石表示价值
-    let username = 'HYPE Flow Monitor 💫';
+    let username = 'Token Tracer 💫';
     let signalType = 'FLOW DETECTED';
 
     // 根据金额和类型确定警报级别和主题
     const amount = parseFloat(alert.amount);
     if (amount >= 100000) {
       alertLevel = 'HIGH';
-      alertEmoji = isTransferIn ? '🌊' : '🌋'; // 海啸流入 vs 火山流出
-      username = isTransferIn ? 'TSUNAMI Inflow 🌊' : 'VOLCANO Outflow 🌋';
+      alertEmoji = isTransferIn ? '📈' : '📉'; // 流入上涨 vs 流出下跌
+      username = isTransferIn ? 'Token Tracer Pro 📈' : 'Token Tracer Pro 📉';
       signalType = isTransferIn ? 'MEGA INFLOW' : 'MEGA OUTFLOW';
     } else if (amount >= 50000) {
       alertLevel = 'MEDIUM';
-      alertEmoji = isTransferIn ? '🐋' : '🦈'; // 鲸鱼流入 vs 鲨鱼流出
-      username = isTransferIn ? 'WHALE Inflow 🐋' : 'SHARK Outflow 🦈';
+      alertEmoji = isTransferIn ? '💰' : '💸'; // 资金流入 vs 资金流出
+      username = isTransferIn ? 'Token Tracer 💰' : 'Token Tracer 💸';
       signalType = isTransferIn ? 'BIG INFLOW' : 'BIG OUTFLOW';
     } else if (amount >= 10000) {
       alertLevel = 'MEDIUM';
-      alertEmoji = isTransferIn ? '🐟' : '🏃'; // 鱼群流入 vs 资金逃离
-      username = isTransferIn ? 'Fish School Inflow 🐟' : 'Capital Flight 🏃';
+      alertEmoji = isTransferIn ? '📊' : '📋'; // 数据流入 vs 数据流出
+      username = isTransferIn ? 'Token Tracer 📊' : 'Token Tracer 📋';
       signalType = isTransferIn ? 'NOTABLE INFLOW' : 'NOTABLE OUTFLOW';
     }
 
@@ -262,7 +272,7 @@ export class WebhookNotifier {
           return {
             text: 'Long Position Opened',
             emoji: '🚀', // 火箭表示做多开仓
-            username: 'Bull Signal 🐂',
+            username: 'Trading Signal 🐂',
             icon_emoji: ':rocket:',
             color: 0x00C851, // 更鲜艳的绿色
             signal_type: 'LONG ENTRY'
@@ -271,7 +281,7 @@ export class WebhookNotifier {
           return {
             text: 'Short Position Opened',
             emoji: '🔻', // 下降箭头表示做空开仓
-            username: 'Bear Signal 🐻',
+            username: 'Trading Signal 🐻',
             icon_emoji: ':small_red_triangle_down:',
             color: 0xFF4444, // 更鲜艳的红色
             signal_type: 'SHORT ENTRY'
@@ -289,7 +299,7 @@ export class WebhookNotifier {
           return {
             text: side === 'long' ? 'Long Position Increased' : 'Short Position Increased',
             emoji: side === 'long' ? '📊' : '📉', // 根据方向选择图表
-            username: side === 'long' ? 'Scale-In Bull 🐂' : 'Scale-In Bear 🐻',
+            username: side === 'long' ? 'Scale-In Signal 🐂' : 'Scale-In Signal 🐻',
             icon_emoji: side === 'long' ? ':chart_with_upwards_trend:' : ':chart_with_downwards_trend:',
             color: side === 'long' ? 0x33B5E5 : 0xFF6B35,
             signal_type: side === 'long' ? 'LONG SCALE-IN' : 'SHORT SCALE-IN'
@@ -307,7 +317,7 @@ export class WebhookNotifier {
           return {
             text: 'Position Updated',
             emoji: '⚡',
-            username: 'Signal Bot 🤖',
+            username: 'Trading Bot 🤖',
             icon_emoji: ':zap:',
             color: 0xFF9800,
             signal_type: 'POSITION UPDATE'

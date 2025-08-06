@@ -427,6 +427,69 @@ export class EnhancedAlertSystem {
 
         return actionMap[event.eventType] || '持仓变化';
     }
+    
+    /**
+     * 计算平仓盈亏
+     */
+    private calculateClosedPositionPnL(event: EnhancedContractEvent): {
+        realized: number;
+        percentage: number;
+        details?: {
+            entryPrice: number;
+            exitPrice: number;
+            size: number;
+        };
+    } | null {
+        try {
+            if (!event.positionBefore || event.eventType !== 'position_close') {
+                return null;
+            }
+
+            const beforePosition = event.positionBefore;
+            const exitPrice = parseFloat(event.price);
+            
+            if (!beforePosition || !exitPrice || beforePosition.size === 0) {
+                return null;
+            }
+
+            // 计算已实现盈亏
+            const entryPrice = beforePosition.entryPrice || 0;
+            const size = Math.abs(beforePosition.size);
+            const side = beforePosition.side;
+            
+            if (entryPrice === 0 || size === 0) {
+                return null;
+            }
+
+            let realizedPnL: number;
+            
+            if (side === 'long') {
+                // 多头平仓：(卖出价 - 买入价) * 数量
+                realizedPnL = (exitPrice - entryPrice) * size;
+            } else {
+                // 空头平仓：(买入价 - 卖出价) * 数量
+                realizedPnL = (entryPrice - exitPrice) * size;
+            }
+
+            // 计算盈亏百分比
+            const costBasis = entryPrice * size;
+            const percentage = costBasis > 0 ? (realizedPnL / costBasis) * 100 : 0;
+
+            return {
+                realized: realizedPnL,
+                percentage,
+                details: {
+                    entryPrice,
+                    exitPrice,
+                    size
+                }
+            };
+
+        } catch (error) {
+            logger.error('计算平仓盈亏失败:', error);
+            return null;
+        }
+    }
 
     /**
      * 格式化基础消息
@@ -438,6 +501,21 @@ export class EnhancedAlertSystem {
     ): string {
         const asset = event.asset;
         const side = event.side;
+        
+        // 检查是否为平仓事件并计算盈亏
+        let pnlInfo = '';
+        if (event.eventType === 'position_close' && event.positionBefore) {
+            const pnl = this.calculateClosedPositionPnL(event);
+            if (pnl) {
+                const pnlEmoji = pnl.realized >= 0 ? '💰' : '📉';
+                const pnlSign = pnl.realized >= 0 ? '+' : '';
+                pnlInfo = `\n💰 **Realized P&L**: ${pnlSign}$${pnl.realized.toFixed(2)} (${pnlSign}${pnl.percentage.toFixed(2)}%) ${pnlEmoji}`;
+                
+                if (pnl.details) {
+                    pnlInfo += `\n📊 **Entry**: $${pnl.details.entryPrice.toFixed(4)} | **Exit**: $${pnl.details.exitPrice.toFixed(4)}`;
+                }
+            }
+        }
         const size = event.size;
         const price = parseFloat(event.price);
         const notional = parseFloat(event.metadata?.notionalValue || '0');
@@ -456,6 +534,11 @@ export class EnhancedAlertSystem {
         message += `🔄 **操作**: ${operationDescription}\n`;
         message += `⏰ **时间**: ${new Date(event.timestamp).toISOString().replace('T', ' ').slice(0, 19)} UTC\n`;
         message += `🔍 **交易哈希**: https://app.hyperliquid.xyz/explorer/tx/${event.hash}\n`;
+
+        // 添加平仓盈亏信息
+        if (pnlInfo) {
+            message += pnlInfo + '\n';
+        }
 
         // 如果有持仓变化信息，显示它
         if (event.positionChange) {

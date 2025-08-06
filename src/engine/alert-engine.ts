@@ -65,11 +65,20 @@ export class AlertEngine {
         amount: event.amount
       });
 
-      // 检查单笔转账预警
-      await this.checkSingleTransferAlert(event, addressInfo);
-
-      // 检查累计转账预警
-      await this.checkCumulativeTransferAlert(event, addressInfo);
+      // 🔧 新的优先级处理逻辑：优先检查累计转账，避免重复警报
+      const cumulativeTriggered = await this.checkCumulativeTransferAlert(event, addressInfo);
+      
+      // 只有当累计转账没有触发时，才检查单笔转账
+      if (!cumulativeTriggered) {
+        await this.checkSingleTransferAlert(event, addressInfo);
+      } else {
+        logger.info('🔕 累计转账警报已触发，跳过单笔转账警报', {
+          address: event.address,
+          label: addressInfo.label,
+          amount: event.amount,
+          reason: '避免重复警报'
+        });
+      }
 
     } catch (error) {
       logger.error('处理预警事件失败:', error, { event });
@@ -111,16 +120,16 @@ export class AlertEngine {
     }
   }
 
-  private async checkCumulativeTransferAlert(event: MonitorEvent, addressInfo: WatchedAddress): Promise<void> {
+  private async checkCumulativeTransferAlert(event: MonitorEvent, addressInfo: WatchedAddress): Promise<boolean> {
     const rule = this.rules.find(r => r.type === 'cumulative_transfer' && r.enabled);
-    if (!rule) return;
+    if (!rule) return false;
 
     // 更新累计缓存
     await this.cache.updateDailyCache(event.address, event);
 
     // 获取累计数据
     const dailyCache = await this.cache.getDailyCache(event.address);
-    if (!dailyCache) return;
+    if (!dailyCache) return false;
 
     const threshold = addressInfo.customThresholds?.cumulative24h || rule.threshold;
     const direction = event.eventType.includes('in') ? 'in' : 'out';
@@ -156,7 +165,10 @@ export class AlertEngine {
       });
 
       await this.notifier.sendAlert(alert);
+      return true; // 返回true表示累计警报已触发
     }
+    
+    return false; // 返回false表示累计警报未触发
   }
 
   // 获取统计数据

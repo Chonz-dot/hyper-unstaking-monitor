@@ -56,11 +56,34 @@ export class TradeClassificationEngine {
                 // 获取交易前的持仓状态
                 let beforePosition: AssetPosition | null = null;
                 
+                // 🔍 调试日志：记录查询时机
+                const queryStartTime = Date.now();
+                logger.info(`🔍 [调试] 开始查询持仓状态${attemptSuffix}`, {
+                    trader: trader.label,
+                    asset,
+                    fillTime: new Date(fill.time).toISOString(),
+                    queryTime: new Date(queryStartTime).toISOString(),
+                    timeDiff: `${queryStartTime - fill.time}ms after fill`,
+                    attempt
+                });
+                
                 // 尝试从缓存获取历史持仓，而不是当前持仓
                 try {
                     const cachedPosition = await this.positionManager.getAssetPosition(trader.address, asset);
-                    // 如果有缓存，先使用缓存作为 before 状态
                     beforePosition = cachedPosition;
+                    
+                    // 🔍 调试日志：缓存持仓状态
+                    logger.info(`🔍 [调试] 获取到缓存持仓${attemptSuffix}`, {
+                        trader: trader.label,
+                        asset,
+                        cachedPosition: cachedPosition ? {
+                            size: cachedPosition.size,
+                            side: cachedPosition.side,
+                            entryPrice: cachedPosition.entryPrice,
+                            unrealizedPnl: cachedPosition.unrealizedPnl
+                        } : null,
+                        isCacheEmpty: !cachedPosition
+                    });
                 } catch (error) {
                     logger.debug(`无法获取缓存持仓，将在交易后推算`, { trader: trader.label, asset });
                 }
@@ -69,24 +92,76 @@ export class TradeClassificationEngine {
                 const waitTime = delayMs + (attempt * 3000); // 每次重试增加3秒
                 
                 if (waitTime > 0) {
-                    logger.debug(`⏰ 等待交易结算 ${waitTime}ms${attemptSuffix}`);
+                    logger.info(`⏰ [调试] 等待交易结算 ${waitTime}ms${attemptSuffix}`, {
+                        trader: trader.label,
+                        asset,
+                        waitReason: '让API数据更新，获取准确的交易后持仓'
+                    });
                     await new Promise(resolve => setTimeout(resolve, waitTime));
                 }
                 
                 // 强制刷新获取交易后的持仓状态
+                const refreshStartTime = Date.now();
                 await this.positionManager.refreshUserPosition(trader.address);
                 const afterPosition = await this.positionManager.getAssetPosition(trader.address, asset);
+                
+                // 🔍 调试日志：交易后持仓状态
+                logger.info(`🔍 [调试] 获取交易后持仓${attemptSuffix}`, {
+                    trader: trader.label,
+                    asset,
+                    refreshTime: new Date(refreshStartTime).toISOString(),
+                    afterPosition: afterPosition ? {
+                        size: afterPosition.size,
+                        side: afterPosition.side,
+                        entryPrice: afterPosition.entryPrice,
+                        unrealizedPnl: afterPosition.unrealizedPnl
+                    } : null,
+                    isAfterEmpty: !afterPosition
+                });
                 
                 // 如果之前没有获取到 beforePosition，尝试根据交易推算
                 if (!beforePosition && afterPosition) {
                     beforePosition = this.estimateBeforePosition(afterPosition, fill);
-                    logger.debug(`📊 推算交易前持仓`, {
+                    logger.info(`📊 [调试] 推算交易前持仓${attemptSuffix}`, {
                         trader: trader.label,
                         asset,
-                        estimatedBefore: beforePosition,
-                        actualAfter: afterPosition
+                        estimatedBefore: beforePosition ? {
+                            size: beforePosition.size,
+                            side: beforePosition.side,
+                            entryPrice: beforePosition.entryPrice,
+                            unrealizedPnl: beforePosition.unrealizedPnl
+                        } : null,
+                        actualAfter: afterPosition ? {
+                            size: afterPosition.size,
+                            side: afterPosition.side,
+                            entryPrice: afterPosition.entryPrice,
+                            unrealizedPnl: afterPosition.unrealizedPnl
+                        } : null,
+                        fillSize,
+                        fillSide
                     });
                 }
+                
+                // 🔍 调试日志：对比前后持仓
+                logger.info(`🔍 [调试] 持仓状态对比${attemptSuffix}`, {
+                    trader: trader.label,
+                    asset,
+                    before: beforePosition ? {
+                        size: beforePosition.size,
+                        side: beforePosition.side,
+                        hasPosition: beforePosition.size !== 0
+                    } : null,
+                    after: afterPosition ? {
+                        size: afterPosition.size,
+                        side: afterPosition.side,
+                        hasPosition: afterPosition.size !== 0
+                    } : null,
+                    fillInfo: {
+                        size: fillSize,
+                        side: fillSide,
+                        oid: fill.oid
+                    }
+                });
                 
                 // 分析持仓变化
                 const changeAnalysis = await this.positionManager.comparePositionChange(
@@ -94,6 +169,19 @@ export class TradeClassificationEngine {
                     asset,
                     beforePosition
                 );
+                
+                // 🔍 调试日志：持仓变化分析结果
+                logger.info(`🔍 [调试] 持仓变化分析${attemptSuffix}`, {
+                    trader: trader.label,
+                    asset,
+                    changeType: changeAnalysis.changeType,
+                    sizeChange: changeAnalysis.sizeChange,
+                    sideChanged: changeAnalysis.sideChanged,
+                    description: changeAnalysis.description,
+                    isNoChange: changeAnalysis.changeType === 'NO_CHANGE',
+                    fillSize,
+                    fillSide
+                });
                 
                 // 验证分析结果的合理性
                 const validationResult = this.validateTradeClassification(

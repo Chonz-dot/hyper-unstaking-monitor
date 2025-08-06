@@ -237,18 +237,28 @@ class TraderMonitor {
 
   private async handleContractEvent(event: any, trader: ContractTrader): Promise<void> {
     try {
-      logger.info('收到增强合约事件', {
+      // 🔍 调试日志：追踪事件接收
+      logger.info('🔍 [调试] 收到合约事件', {
         trader: trader.label,
         alertType: event.alertType || event.eventType,
         asset: event.asset,
         size: event.size,
         side: event.side,
         enhanced: event.enhanced || false,
-        alertLevel: event.alertLevel || 'basic'
+        alertLevel: event.alertLevel || 'basic',
+        source: event.metadata?.source || 'unknown',
+        eventPath: '主处理器接收事件'
       });
 
       // 直接发送增强告警（已经是格式化的告警对象）
       await this.notifier.sendContractAlert(event);
+      
+      // 🔍 调试日志：确认发送
+      logger.info('✅ [调试] 合约事件已发送到webhook', {
+        trader: trader.label,
+        alertType: event.alertType || event.eventType,
+        enhanced: event.enhanced || false
+      });
 
     } catch (error) {
       logger.error('处理合约事件失败:', error, { event, trader });

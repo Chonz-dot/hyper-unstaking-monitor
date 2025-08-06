@@ -27,8 +27,8 @@ export class PureRpcContractMonitor extends EventEmitter {
     private alertSystem: EnhancedAlertSystem;
     
     // 轮询配置 - 平衡性能和API限制
-    private readonly POLLING_INTERVAL = 15000; // 15秒轮询间隔，减少API压力
-    private readonly ERROR_RETRY_DELAY = 30000; // 错误重试延迟30秒
+    private readonly POLLING_INTERVAL = 30000; // 30秒轮询间隔，减少API压力
+    private readonly ERROR_RETRY_DELAY = 60000; // 错误重试延迟60秒
     
     // 订单聚合管理
     private lastProcessedTime = new Map<string, number>();
@@ -41,7 +41,7 @@ export class PureRpcContractMonitor extends EventEmitter {
     
     // 速率限制控制
     private lastApiCall = 0;
-    private readonly API_RATE_LIMIT_MS = 2000; // 2秒间隔，避免429错误
+    private readonly API_RATE_LIMIT_MS = 5000; // 5秒间隔，避免429错误
     private pendingOrderQueries = new Map<number, Promise<any>>(); // 避免重复查询
     
     // 去重缓存，避免重复处理相同的填充
@@ -218,25 +218,59 @@ export class PureRpcContractMonitor extends EventEmitter {
             } catch (error) {
                 this.stats.totalErrors++;
                 this.stats.consecutiveErrors++;
-                logger.error(`${trader.label}轮询失败:`, error);
                 
-                // 如果连续错误太多，增加延迟
-                if (this.stats.consecutiveErrors > 3) {
-                    logger.warn(`${trader.label}连续错误过多，暂停轮询30秒`);
+                // 🔧 改进的错误处理逻辑
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                
+                if (errorMessage.includes('429') || errorMessage.includes('API_RATE_LIMITED')) {
+                    // 429错误：API速率限制
+                    const customDelay = errorMessage.includes('API_RATE_LIMITED') 
+                        ? parseInt(errorMessage.split('_').pop() || '60000') 
+                        : Math.min(60000 * Math.pow(2, this.stats.consecutiveErrors - 1), 300000);
+                    
+                    logger.warn(`🚫 ${trader.label} API速率限制，暂停${customDelay/1000}秒`, {
+                        consecutiveErrors: this.stats.consecutiveErrors,
+                        nextRetry: new Date(Date.now() + customDelay).toISOString()
+                    });
+                    
                     setTimeout(() => {
                         if (this.isRunning) {
                             this.startTraderPolling(trader);
                         }
-                    }, 30000);
+                    }, customDelay);
                     return;
+                } else {
+                    // 其他错误：使用原有逻辑
+                    logger.error(`${trader.label}轮询失败:`, error);
+                    
+                    // 如果连续错误太多，增加延迟
+                    if (this.stats.consecutiveErrors > 3) {
+                        const backoffDelay = Math.min(60000 * Math.pow(2, this.stats.consecutiveErrors - 3), 300000); // 指数退避，最大5分钟
+                        logger.warn(`${trader.label}连续错误过多，暂停轮询${backoffDelay/1000}秒`, {
+                            consecutiveErrors: this.stats.consecutiveErrors,
+                            backoffDelay: `${backoffDelay/1000}s`
+                        });
+                        setTimeout(() => {
+                            if (this.isRunning) {
+                                this.startTraderPolling(trader);
+                            }
+                        }, backoffDelay);
+                        return;
+                    }
                 }
             }
         };
 
-        // 立即执行一次，然后设置定时轮询
-        pollTrader();
+        // 添加随机延迟，分散API调用时间，避免所有交易员同时请求
+        const randomDelay = Math.random() * 10000; // 0-10秒随机延迟
+        logger.debug(`${trader.label}将在${(randomDelay/1000).toFixed(1)}秒后开始轮询`, {
+            randomDelay: `${(randomDelay/1000).toFixed(1)}s`,
+            reason: '分散API调用，避免429错误'
+        });
         
-        const interval = setInterval(pollTrader, this.POLLING_INTERVAL);
+        setTimeout(pollTrader, randomDelay);
+        
+        const interval = setInterval(pollTrader, this.POLLING_INTERVAL + Math.random() * 5000); // 轮询间隔也添加随机性
         this.pollingIntervals.push(interval);
     }
 
@@ -249,6 +283,15 @@ export class PureRpcContractMonitor extends EventEmitter {
         const endTime = Date.now();
         
         try {
+            // 🔧 API速率限制检查 - 增强版
+            const now = Date.now();
+            const timeSinceLastCall = now - this.lastApiCall;
+            if (timeSinceLastCall < this.API_RATE_LIMIT_MS) {
+                const waitTime = this.API_RATE_LIMIT_MS - timeSinceLastCall;
+                logger.debug(`⏰ ${trader.label} API速率限制等待 ${waitTime}ms`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+            }
+            this.lastApiCall = Date.now();
             logger.info(`🔍 轮询${trader.label}交易数据 (扩展窗口)`, {
                 address: trader.address,
                 startTime: new Date(startTime).toISOString(),
@@ -329,8 +372,28 @@ export class PureRpcContractMonitor extends EventEmitter {
             this.lastProcessedTime.set(trader.address, endTime);
 
         } catch (error) {
-            logger.error(`${trader.label}数据获取失败:`, error);
-            throw error;
+            // 🔧 特殊处理429错误
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (errorMessage.includes('429')) {
+                this.stats.totalErrors++;
+                this.stats.consecutiveErrors++;
+                
+                // 429错误需要更长的等待时间
+                const backoffDelay = Math.min(30000 * Math.pow(2, this.stats.consecutiveErrors), 300000); // 30s, 60s, 120s, 240s, 最大5分钟
+                logger.warn(`⚠️ ${trader.label} 触发API限制(429)，延长等待时间`, {
+                    consecutiveErrors: this.stats.consecutiveErrors,
+                    backoffDelay: `${backoffDelay/1000}s`,
+                    nextRetry: new Date(Date.now() + backoffDelay).toISOString(),
+                    recommendation: '考虑增加轮询间隔'
+                });
+                
+                // 更新最后处理时间，避免时间窗口过大
+                this.lastProcessedTime.set(trader.address, endTime);
+                throw new Error(`API_RATE_LIMITED_${backoffDelay}`);
+            } else {
+                logger.error(`${trader.label}数据获取失败:`, error);
+                throw error;
+            }
         }
     }
 
@@ -362,16 +425,40 @@ export class PureRpcContractMonitor extends EventEmitter {
                 time: new Date(fill.time).toISOString()
             });
 
-            // 简化处理：直接发射事件，不聚合
-            const signal = this.convertFillToContractSignal(fill, trader);
-            if (signal) {
-                signal.metadata = {
-                    ...signal.metadata,
-                    source: 'pure-rpc-api'
-                };
+            // 检查是否启用增强分析
+            const useEnhancedAnalysis = true; // 默认启用增强分析
+
+            if (useEnhancedAnalysis) {
+                // 使用增强分析系统，不发送基础事件以避免重复
+                logger.debug(`📊 [调试] 使用增强分析处理 ${trader.label} 的填充，跳过基础事件发送`, {
+                    trader: trader.label,
+                    asset: coin,
+                    size: size,
+                    notional: `$${notionalValue.toFixed(2)}`,
+                    eventPath: '跳过基础事件，等待增强分析'
+                });
+                return; // 让聚合订单处理逻辑来发送增强的事件
+            } else {
+                // 使用基础系统：直接发射事件，不聚合
+                logger.info(`📊 [调试] 使用基础系统发送事件`, {
+                    trader: trader.label,
+                    asset: coin,
+                    size: size,
+                    notional: `$${notionalValue.toFixed(2)}`,
+                    eventPath: '基础事件路径'
+                });
                 
-                this.emit('contractEvent', signal, trader);
-                this.stats.totalEvents++;
+                const signal = this.convertFillToContractSignal(fill, trader);
+                if (signal) {
+                    signal.metadata = {
+                        ...signal.metadata,
+                        source: 'pure-rpc-api',
+                        enhanced: false
+                    };
+                    
+                    this.emit('contractEvent', signal, trader);
+                    this.stats.totalEvents++;
+                }
             }
 
         } catch (error) {
@@ -557,9 +644,13 @@ export class PureRpcContractMonitor extends EventEmitter {
                 // 创建增强告警
                 const enhancedAlert = await this.alertSystem.createEnhancedAlert(enhancedEvent, trader);
                 
-                logger.info(`🚨 ${trader.label} 增强告警生成`, {
+                logger.info(`🚨 [调试] 即将发送增强告警`, {
+                    trader: trader.label,
+                    asset: enhancedEvent.asset,
+                    alertType: enhancedAlert.alertType,
                     alertLevel: enhancedAlert.alertLevel,
                     enhanced: enhancedAlert.enhanced,
+                    eventPath: '增强分析路径',
                     riskLevel: enhancedAlert.positionAnalysis?.riskLevel,
                     signalStrength: enhancedAlert.positionAnalysis?.signalStars
                 });
@@ -568,7 +659,14 @@ export class PureRpcContractMonitor extends EventEmitter {
                 this.emit('contractEvent', enhancedAlert, trader);
                 this.stats.totalEvents++;
             } else {
-                logger.warn(`⚠️ ${trader.label} 交易分类失败，跳过事件`);
+                logger.warn(`⚠️ [调试] 交易分类失败，事件被跳过`, {
+                    trader: trader.label,
+                    asset: aggregatedOrder.coin,
+                    size: aggregatedOrder.sz,
+                    notional: `$${(Math.abs(parseFloat(aggregatedOrder.sz || '0')) * parseFloat(aggregatedOrder.px || '0')).toFixed(2)}`,
+                    reason: '增强分析返回null',
+                    eventPath: '分析失败，无事件发送'
+                });
             }
 
         } catch (error) {
