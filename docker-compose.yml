@@ -7,10 +7,12 @@ services:
       - "${REDIS_PORT:-6380}:6379"  # 默认使用6380端口避免冲突
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command: >
+      redis-server 
+      --appendonly yes
+      --stop-writes-on-bgsave-error no
+      --save ""
     restart: unless-stopped
-    sysctls:
-      - vm.overcommit_memory=1  # 修复Redis内存警告
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
