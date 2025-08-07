@@ -9,6 +9,8 @@ services:
       - redis_data:/data
     command: redis-server --appendonly yes
     restart: unless-stopped
+    sysctls:
+      - vm.overcommit_memory=1  # 修复Redis内存警告
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s

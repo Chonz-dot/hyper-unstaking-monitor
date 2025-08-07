@@ -129,17 +129,39 @@ export class RpcSpotMonitor extends EventEmitter {
                 this.stats.totalErrors++;
                 this.stats.consecutiveErrors++;
                 
-                logger.error(`❌ ${address.label}轮询失败:`, error);
+                // 🔧 增强错误处理：区分网络错误和其他错误
+                const isNetworkError = this.isNetworkError(error);
+                const errorType = isNetworkError ? '网络错误' : '其他错误';
                 
-                // 如果连续错误太多，增加延迟
-                if (this.stats.consecutiveErrors > 5) {
-                    logger.warn(`${address.label}连续错误过多，暂停轮询60秒`);
-                    setTimeout(() => {
-                        if (this.isRunning) {
-                            this.startAddressPolling(address);
-                        }
-                    }, 60000);
-                    return;
+                logger.warn(`⚠️ ${address.label}现货监控${errorType}`, {
+                    error: error instanceof Error ? error.message : error,
+                    isNetworkError,
+                    consecutiveErrors: this.stats.consecutiveErrors,
+                    nextAction: isNetworkError ? '继续正常轮询' : '可能增加延迟'
+                });
+                
+                // 🔧 对于网络错误，更宽松的处理策略
+                if (isNetworkError) {
+                    // 网络错误：记录但继续运行，不增加长延迟
+                    if (this.stats.consecutiveErrors > 15) {
+                        logger.warn(`${address.label}连续网络错误过多，但继续尝试`, {
+                            consecutiveErrors: this.stats.consecutiveErrors,
+                            strategy: '保持正常轮询间隔',
+                            note: '网络问题通常是暂时的'
+                        });
+                    }
+                    // 对于网络错误，不使用长延迟，继续正常轮询
+                } else {
+                    // 非网络错误：使用原有的延迟策略
+                    if (this.stats.consecutiveErrors > 5) {
+                        logger.warn(`${address.label}连续非网络错误过多，暂停轮询60秒`);
+                        setTimeout(() => {
+                            if (this.isRunning) {
+                                this.startAddressPolling(address);
+                            }
+                        }, 60000);
+                        return;
+                    }
                 }
             }
 
@@ -486,6 +508,52 @@ export class RpcSpotMonitor extends EventEmitter {
                 lastProcessed: this.lastProcessedTime.get(addr.address)
             }))
         };
+    }
+    
+    /**
+     * 检测是否为网络错误
+     */
+    private isNetworkError(error: unknown): boolean {
+        if (!error || typeof error !== 'object') return false;
+        
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const cause = (error as any).cause;
+        
+        // 检查常见的网络错误标识
+        const networkErrorPatterns = [
+            'fetch failed',
+            'EAI_AGAIN',
+            'ENOTFOUND',
+            'ECONNREFUSED',
+            'ECONNRESET',
+            'ETIMEDOUT',
+            'EHOSTUNREACH',
+            'getaddrinfo',
+            'network error',
+            'DNS error'
+        ];
+        
+        // 检查错误消息
+        const hasNetworkPattern = networkErrorPatterns.some(pattern => 
+            errorMessage.toLowerCase().includes(pattern.toLowerCase())
+        );
+        
+        // 检查 cause 对象中的网络错误
+        if (cause && typeof cause === 'object') {
+            const causeCode = (cause as any).code;
+            const causeSyscall = (cause as any).syscall;
+            
+            if (causeCode === 'EAI_AGAIN' || 
+                causeCode === 'ENOTFOUND' || 
+                causeCode === 'ECONNREFUSED' ||
+                causeCode === 'ECONNRESET' ||
+                causeCode === 'ETIMEDOUT' ||
+                causeSyscall === 'getaddrinfo') {
+                return true;
+            }
+        }
+        
+        return hasNetworkPattern;
     }
 }
 

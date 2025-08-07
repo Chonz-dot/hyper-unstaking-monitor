@@ -240,22 +240,43 @@ export class PureRpcContractMonitor extends EventEmitter {
                     }, customDelay);
                     return;
                 } else {
-                    // 其他错误：使用原有逻辑
-                    logger.error(`${trader.label}轮询失败:`, error);
+                    // 🔧 增强错误处理：区分网络错误和其他错误
+                    const isNetworkError = this.isNetworkError(error);
+                    const errorType = isNetworkError ? '网络错误' : '其他错误';
                     
-                    // 如果连续错误太多，增加延迟
-                    if (this.stats.consecutiveErrors > 3) {
-                        const backoffDelay = Math.min(60000 * Math.pow(2, this.stats.consecutiveErrors - 3), 300000); // 指数退避，最大5分钟
-                        logger.warn(`${trader.label}连续错误过多，暂停轮询${backoffDelay/1000}秒`, {
-                            consecutiveErrors: this.stats.consecutiveErrors,
-                            backoffDelay: `${backoffDelay/1000}s`
-                        });
-                        setTimeout(() => {
-                            if (this.isRunning) {
-                                this.startTraderPolling(trader);
-                            }
-                        }, backoffDelay);
-                        return;
+                    logger.warn(`⚠️ ${trader.label}轮询${errorType}`, {
+                        error: errorMessage,
+                        isNetworkError,
+                        consecutiveErrors: this.stats.consecutiveErrors,
+                        nextAction: isNetworkError ? '继续正常轮询' : '可能增加延迟'
+                    });
+                    
+                    // 🔧 对于网络错误，更宽松的处理策略
+                    if (isNetworkError) {
+                        // 网络错误：记录但继续运行，不增加长延迟
+                        if (this.stats.consecutiveErrors > 20) {
+                            logger.warn(`${trader.label}连续网络错误过多，但继续尝试`, {
+                                consecutiveErrors: this.stats.consecutiveErrors,
+                                strategy: '保持正常轮询间隔',
+                                note: '网络问题通常是暂时的'
+                            });
+                        }
+                        // 对于网络错误，不使用指数退避，继续正常轮询
+                    } else {
+                        // 非网络错误：使用原有的延迟策略
+                        if (this.stats.consecutiveErrors > 3) {
+                            const backoffDelay = Math.min(60000 * Math.pow(2, this.stats.consecutiveErrors - 3), 300000);
+                            logger.warn(`${trader.label}连续非网络错误过多，暂停轮询${backoffDelay/1000}秒`, {
+                                consecutiveErrors: this.stats.consecutiveErrors,
+                                backoffDelay: `${backoffDelay/1000}s`
+                            });
+                            setTimeout(() => {
+                                if (this.isRunning) {
+                                    this.startTraderPolling(trader);
+                                }
+                            }, backoffDelay);
+                            return;
+                        }
                     }
                 }
             }
@@ -299,13 +320,8 @@ export class PureRpcContractMonitor extends EventEmitter {
                 timeRangeMinutes: Math.round((endTime - startTime) / (60 * 1000))
             });
 
-            // 获取指定时间范围内的用户填充数据（启用聚合）
-            const fills = await this.infoClient.userFillsByTime({
-                user: trader.address as `0x${string}`,
-                startTime: startTime, // 保持毫秒时间戳
-                endTime: endTime,     // 保持毫秒时间戳
-                aggregateByTime: true // 启用时间聚合，合并部分成交
-            });
+            // 获取指定时间范围内的用户填充数据（带重试机制）
+            const fills = await this.fetchFillsWithRetry(trader, startTime, endTime);
 
             // 详细记录API响应，检查是否达到返回限制
             const fillsCount = fills?.length || 0;
@@ -1131,6 +1147,106 @@ export class PureRpcContractMonitor extends EventEmitter {
 
     getTotalSubscriptions(): number {
         return this.traders.length;
+    }
+    
+    /**
+     * 检测是否为网络错误
+     */
+    private isNetworkError(error: unknown): boolean {
+        if (!error || typeof error !== 'object') return false;
+        
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const cause = (error as any).cause;
+        
+        // 检查常见的网络错误标识
+        const networkErrorPatterns = [
+            'fetch failed',
+            'EAI_AGAIN',
+            'ENOTFOUND',
+            'ECONNREFUSED',
+            'ECONNRESET',
+            'ETIMEDOUT',
+            'EHOSTUNREACH',
+            'getaddrinfo',
+            'network error',
+            'DNS error'
+        ];
+        
+        // 检查错误消息
+        const hasNetworkPattern = networkErrorPatterns.some(pattern => 
+            errorMessage.toLowerCase().includes(pattern.toLowerCase())
+        );
+        
+        // 检查 cause 对象中的网络错误
+        if (cause && typeof cause === 'object') {
+            const causeCode = (cause as any).code;
+            const causeSyscall = (cause as any).syscall;
+            
+            if (causeCode === 'EAI_AGAIN' || 
+                causeCode === 'ENOTFOUND' || 
+                causeCode === 'ECONNREFUSED' ||
+                causeCode === 'ECONNRESET' ||
+                causeCode === 'ETIMEDOUT' ||
+                causeSyscall === 'getaddrinfo') {
+                return true;
+            }
+        }
+        
+        return hasNetworkPattern;
+    }
+    
+    /**
+     * 带重试机制的API调用
+     */
+    private async fetchFillsWithRetry(trader: ContractTrader, startTime: number, endTime: number, maxRetries: number = 3): Promise<any[]> {
+        let lastError: unknown;
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const fills = await this.infoClient.userFillsByTime({
+                    user: trader.address as `0x${string}`,
+                    startTime: startTime,
+                    endTime: endTime,
+                    aggregateByTime: true
+                });
+                
+                // 成功获取数据，重置错误计数
+                if (attempt > 1) {
+                    logger.info(`✅ ${trader.label} API重试成功`, {
+                        attempt,
+                        maxRetries
+                    });
+                }
+                
+                return fills || [];
+                
+            } catch (error) {
+                lastError = error;
+                const isNetworkError = this.isNetworkError(error);
+                
+                logger.warn(`⚠️ ${trader.label} API调用失败 (尝试 ${attempt}/${maxRetries})`, {
+                    error: error instanceof Error ? error.message : error,
+                    isNetworkError,
+                    willRetry: attempt < maxRetries
+                });
+                
+                // 如果是网络错误且还有重试机会，等待后重试
+                if (isNetworkError && attempt < maxRetries) {
+                    const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // 1s, 2s, 4s, 最大5s
+                    logger.debug(`⏰ 等待${delayMs}ms后重试...`);
+                    await new Promise(resolve => setTimeout(resolve, delayMs));
+                    continue;
+                }
+                
+                // 非网络错误或者达到最大重试次数，直接抛出
+                if (!isNetworkError || attempt >= maxRetries) {
+                    throw error;
+                }
+            }
+        }
+        
+        // 理论上不会到达这里，但为了类型安全
+        throw lastError;
     }
 }
 
