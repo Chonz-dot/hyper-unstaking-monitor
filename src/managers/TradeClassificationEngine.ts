@@ -53,10 +53,10 @@ export class TradeClassificationEngine {
                     attempt
                 });
 
-                // 获取交易前的持仓状态
+                // 🔧 改进的持仓状态获取策略
                 let beforePosition: AssetPosition | null = null;
                 
-                // 🔍 调试日志：记录查询时机
+                // 记录查询时机
                 const queryStartTime = Date.now();
                 logger.info(`🔍 [调试] 开始查询持仓状态${attemptSuffix}`, {
                     trader: trader.label,
@@ -67,25 +67,56 @@ export class TradeClassificationEngine {
                     attempt
                 });
                 
-                // 尝试从缓存获取历史持仓，而不是当前持仓
+                // 策略1: 尝试根据交易数据反推交易前持仓
                 try {
-                    const cachedPosition = await this.positionManager.getAssetPosition(trader.address, asset);
-                    beforePosition = cachedPosition;
+                    // 先获取当前持仓（交易后）
+                    await this.positionManager.refreshUserPosition(trader.address);
+                    const currentPosition = await this.positionManager.getAssetPosition(trader.address, asset);
                     
-                    // 🔍 调试日志：缓存持仓状态
-                    logger.info(`🔍 [调试] 获取到缓存持仓${attemptSuffix}`, {
-                        trader: trader.label,
-                        asset,
-                        cachedPosition: cachedPosition ? {
-                            size: cachedPosition.size,
-                            side: cachedPosition.side,
-                            entryPrice: cachedPosition.entryPrice,
-                            unrealizedPnl: cachedPosition.unrealizedPnl
-                        } : null,
-                        isCacheEmpty: !cachedPosition
-                    });
+                    if (currentPosition) {
+                        // 根据fill数据反推交易前持仓
+                        beforePosition = this.estimateBeforePositionFromCurrent(currentPosition, fill);
+                        
+                        logger.info(`🔍 [调试] 反推交易前持仓${attemptSuffix}`, {
+                            trader: trader.label,
+                            asset,
+                            currentPosition: {
+                                size: currentPosition.size,
+                                side: currentPosition.side,
+                                entryPrice: currentPosition.entryPrice
+                            },
+                            estimatedBefore: beforePosition ? {
+                                size: beforePosition.size,
+                                side: beforePosition.side,
+                                entryPrice: beforePosition.entryPrice
+                            } : null,
+                            fillInfo: {
+                                size: fillSize,
+                                side: fillSide,
+                                estimationMethod: 'reverse_calculation'
+                            }
+                        });
+                    }
                 } catch (error) {
-                    logger.debug(`无法获取缓存持仓，将在交易后推算`, { trader: trader.label, asset });
+                    logger.debug(`反推持仓失败，使用缓存方法`, { trader: trader.label, asset, error: (error as Error).message });
+                    
+                    // 策略2: 回退到缓存方法
+                    try {
+                        const cachedPosition = await this.positionManager.getAssetPosition(trader.address, asset);
+                        beforePosition = cachedPosition;
+                        
+                        logger.info(`🔍 [调试] 使用缓存持仓${attemptSuffix}`, {
+                            trader: trader.label,
+                            asset,
+                            cachedPosition: cachedPosition ? {
+                                size: cachedPosition.size,
+                                side: cachedPosition.side,
+                                entryPrice: cachedPosition.entryPrice
+                            } : null
+                        });
+                    } catch (cacheError) {
+                        logger.debug(`缓存获取也失败，将在等待后重新查询`, { trader: trader.label, asset });
+                    }
                 }
                 
                 // 计算等待时间：首次5秒，重试时逐渐增加
@@ -877,6 +908,57 @@ export class TradeClassificationEngine {
                 : 0
         };
     }
+    
+    /**
+     * 根据当前持仓和交易数据反推交易前持仓（改进版）
+     */
+    private estimateBeforePositionFromCurrent(currentPosition: AssetPosition, fill: any): AssetPosition {
+        const fillSize = parseFloat(fill.sz || '0');
+        const fillSide = fill.side === 'B' ? 'long' : 'short';
+        const fillPrice = parseFloat(fill.px || '0');
+        
+        // 根据交易方向计算交易前的持仓
+        let beforeSize: number;
+        let beforeSide: 'long' | 'short' = currentPosition.side as 'long' | 'short';
+        
+        if (currentPosition.side === fillSide) {
+            // 同向交易：加仓，交易前持仓 = 交易后持仓 - 交易数量
+            beforeSize = currentPosition.size - fillSize;
+        } else {
+            // 反向交易：减仓或平仓，交易前持仓 = 交易后持仓 + 交易数量
+            beforeSize = currentPosition.size + fillSize;
+        }
+        
+        // 如果计算出的beforeSize为负数，可能是方向变化
+        if (beforeSize < 0) {
+            beforeSize = Math.abs(beforeSize);
+            beforeSide = beforeSide === 'long' ? 'short' : 'long';
+        }
+        
+        // 估算交易前的平均价格（简化计算）
+        let beforeEntryPrice = currentPosition.entryPrice;
+        
+        // 如果是加仓，需要重新计算平均价格
+        if (currentPosition.side === fillSide && beforeSize > 0) {
+            // 加仓情况下的平均价格反推
+            const currentNotional = currentPosition.size * currentPosition.entryPrice;
+            const fillNotional = fillSize * fillPrice;
+            const beforeNotional = currentNotional - fillNotional;
+            
+            if (beforeSize > 0) {
+                beforeEntryPrice = beforeNotional / beforeSize;
+            }
+        }
+        
+        return {
+            asset: currentPosition.asset,
+            size: beforeSize,
+            side: beforeSide,
+            entryPrice: beforeEntryPrice,
+            unrealizedPnl: 0, // 无法准确计算历史未实现盈亏
+            notionalValue: beforeSize * beforeEntryPrice
+        };
+    }
 
     /**
      * 重置统计信息
@@ -911,3 +993,5 @@ export interface EnhancedContractEvent extends ContractEvent {
 }
 
 export default TradeClassificationEngine;
+
+// 在类内部添加新方法（需要插入到类的末尾，在最后的}之前）

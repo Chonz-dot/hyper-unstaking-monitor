@@ -29,6 +29,7 @@ export class PureRpcContractMonitor extends EventEmitter {
     // 轮询配置 - 平衡性能和API限制
     private readonly POLLING_INTERVAL = 30000; // 30秒轮询间隔，减少API压力
     private readonly ERROR_RETRY_DELAY = 60000; // 错误重试延迟60秒
+    private readonly MAX_CONSECUTIVE_ERRORS = 5; // 增加到5次连续错误
     
     // 订单聚合管理
     private lastProcessedTime = new Map<string, number>();
