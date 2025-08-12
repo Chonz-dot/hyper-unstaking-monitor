@@ -19,36 +19,36 @@ export class PureRpcContractMonitor extends EventEmitter {
     private systemStartTime: number; // 系统启动时间
     private infoClient: hl.InfoClient;
     private pollingIntervals: NodeJS.Timeout[] = [];
-    
+
     // 增强功能组件
     private positionManager: PositionStateManager;
     private classificationEngine: TradeClassificationEngine;
     private analysisEngine: PositionAnalysisEngine;
     private alertSystem: EnhancedAlertSystem;
-    
-    // 轮询配置 - 平衡性能和API限制
-    private readonly POLLING_INTERVAL = 30000; // 30秒轮询间隔，减少API压力
-    private readonly ERROR_RETRY_DELAY = 60000; // 错误重试延迟60秒
+
+    // 轮询配置 - 优化API调用频率，避免429错误
+    private readonly POLLING_INTERVAL = 120000; // 保持30秒轮询间隔
+    private readonly ERROR_RETRY_DELAY = 300000; // 增加错误重试延迟到120秒
     private readonly MAX_CONSECUTIVE_ERRORS = 5; // 增加到5次连续错误
-    
+
     // 订单聚合管理
     private lastProcessedTime = new Map<string, number>();
     private pendingOrderFills = new Map<string, any>();
     private readonly ORDER_COMPLETION_DELAY = 3000; // 3秒订单完成延迟
-    
+
     // 订单追踪缓存
     private trackedOrders = new Set<number>(); // 已追踪的订单ID
     private orderCompletionCache = new Map<number, any>(); // 订单完整信息缓存
-    
+
     // 速率限制控制
     private lastApiCall = 0;
     private readonly API_RATE_LIMIT_MS = 5000; // 5秒间隔，避免429错误
     private pendingOrderQueries = new Map<number, Promise<any>>(); // 避免重复查询
-    
+
     // 去重缓存，避免重复处理相同的填充
     private processedFills = new Set<string>(); // 使用 hash 或 tid 作为唯一标识
     private readonly MAX_CACHE_SIZE = 10000; // 最大缓存数量
-    
+
     // 统计信息
     private stats = {
         totalRequests: 0,
@@ -67,20 +67,20 @@ export class PureRpcContractMonitor extends EventEmitter {
         this.minNotionalValue = minNotionalValue; // 默认1美元阈值
         this.startTime = Date.now();
         this.systemStartTime = Date.now(); // 记录系统启动时间
-        
+
         // 只使用官方API
         const transport = new hl.HttpTransport({
             timeout: 15000, // 15秒超时，更短
             isTestnet: false
         });
         this.infoClient = new hl.InfoClient({ transport });
-        
+
         // 初始化增强功能组件
         this.positionManager = new PositionStateManager(this.infoClient);
         this.classificationEngine = new TradeClassificationEngine(this.positionManager);
         this.analysisEngine = new PositionAnalysisEngine(this.positionManager);
         this.alertSystem = new EnhancedAlertSystem(this.analysisEngine);
-        
+
         // 初始化时间：从系统启动时间开始，避免历史订单污染
         this.traders.forEach(trader => {
             this.lastProcessedTime.set(trader.address, this.systemStartTime);
@@ -95,8 +95,8 @@ export class PureRpcContractMonitor extends EventEmitter {
             systemStartTime: new Date(this.systemStartTime).toISOString(),
             historicalFilterEnabled: true, // 启用历史订单过滤
             enhancedFeatures: [
-                '持仓状态管理', 
-                '智能交易分类', 
+                '持仓状态管理',
+                '智能交易分类',
                 '多维度持仓分析',
                 '增强告警系统',
                 '风险评估引擎',
@@ -118,10 +118,10 @@ export class PureRpcContractMonitor extends EventEmitter {
         try {
             // 测试API连接（添加重试机制）
             logger.info('🔧 测试官方Hyperliquid API连接...');
-            
+
             let retries = 3;
             let testMeta;
-            
+
             while (retries > 0) {
                 try {
                     testMeta = await this.infoClient.meta();
@@ -131,7 +131,7 @@ export class PureRpcContractMonitor extends EventEmitter {
                     logger.warn(`🔄 API连接失败，剩余重试次数: ${retries}`, {
                         error: error instanceof Error ? error.message : error
                     });
-                    
+
                     if (retries > 0) {
                         await new Promise(resolve => setTimeout(resolve, 3000)); // 等待3秒后重试
                     } else {
@@ -139,7 +139,7 @@ export class PureRpcContractMonitor extends EventEmitter {
                     }
                 }
             }
-            
+
             if (testMeta) {
                 logger.info('✅ 官方API连接成功', {
                     universeLength: testMeta.universe?.length || 0,
@@ -151,16 +151,16 @@ export class PureRpcContractMonitor extends EventEmitter {
             if (this.traders.length > 0) {
                 const testTrader = this.traders[0];
                 logger.info(`🔍 测试获取${testTrader.label}数据...`);
-                
+
                 const endTime = Date.now(); // 保持毫秒时间戳
                 const startTime = endTime - 3600000; // 1小时前（毫秒）
-                
+
                 const testFills = await this.infoClient.userFillsByTime({
                     user: testTrader.address as `0x${string}`,
                     startTime,
                     endTime
                 });
-                
+
                 logger.info(`📊 ${testTrader.label}测试结果`, {
                     fillsCount: testFills?.length || 0,
                     timeRange: '最近1小时'
@@ -191,19 +191,19 @@ export class PureRpcContractMonitor extends EventEmitter {
             logger.error('❌ RPC监控器初始化失败，但将继续在后台尝试', {
                 error: error instanceof Error ? error.message : error
             });
-            
+
             // 不直接抛出错误，而是继续启动监控器
             // 网络问题通常是暂时的，轮询中会继续重试
             this.isRunning = true;
-            
+
             // 为每个交易员启动轮询（会在轮询中处理连接问题）
             for (const trader of this.traders) {
                 this.startTraderPolling(trader);
             }
-            
+
             // 启动健康监控
             this.startHealthMonitoring();
-            
+
             logger.info('🔄 RPC监控器已启动，将在轮询中继续尝试连接');
         }
     }
@@ -219,21 +219,21 @@ export class PureRpcContractMonitor extends EventEmitter {
             } catch (error) {
                 this.stats.totalErrors++;
                 this.stats.consecutiveErrors++;
-                
+
                 // 🔧 改进的错误处理逻辑
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                
+
                 if (errorMessage.includes('429') || errorMessage.includes('API_RATE_LIMITED')) {
                     // 429错误：API速率限制
-                    const customDelay = errorMessage.includes('API_RATE_LIMITED') 
-                        ? parseInt(errorMessage.split('_').pop() || '60000') 
+                    const customDelay = errorMessage.includes('API_RATE_LIMITED')
+                        ? parseInt(errorMessage.split('_').pop() || '60000')
                         : Math.min(60000 * Math.pow(2, this.stats.consecutiveErrors - 1), 300000);
-                    
-                    logger.warn(`🚫 ${trader.label} API速率限制，暂停${customDelay/1000}秒`, {
+
+                    logger.warn(`🚫 ${trader.label} API速率限制，暂停${customDelay / 1000}秒`, {
                         consecutiveErrors: this.stats.consecutiveErrors,
                         nextRetry: new Date(Date.now() + customDelay).toISOString()
                     });
-                    
+
                     setTimeout(() => {
                         if (this.isRunning) {
                             this.startTraderPolling(trader);
@@ -244,14 +244,14 @@ export class PureRpcContractMonitor extends EventEmitter {
                     // 🔧 增强错误处理：区分网络错误和其他错误
                     const isNetworkError = this.isNetworkError(error);
                     const errorType = isNetworkError ? '网络错误' : '其他错误';
-                    
+
                     logger.warn(`⚠️ ${trader.label}轮询${errorType}`, {
                         error: errorMessage,
                         isNetworkError,
                         consecutiveErrors: this.stats.consecutiveErrors,
                         nextAction: isNetworkError ? '继续正常轮询' : '可能增加延迟'
                     });
-                    
+
                     // 🔧 对于网络错误，更宽松的处理策略
                     if (isNetworkError) {
                         // 网络错误：记录但继续运行，不增加长延迟
@@ -267,9 +267,9 @@ export class PureRpcContractMonitor extends EventEmitter {
                         // 非网络错误：使用原有的延迟策略
                         if (this.stats.consecutiveErrors > 3) {
                             const backoffDelay = Math.min(60000 * Math.pow(2, this.stats.consecutiveErrors - 3), 300000);
-                            logger.warn(`${trader.label}连续非网络错误过多，暂停轮询${backoffDelay/1000}秒`, {
+                            logger.warn(`${trader.label}连续非网络错误过多，暂停轮询${backoffDelay / 1000}秒`, {
                                 consecutiveErrors: this.stats.consecutiveErrors,
-                                backoffDelay: `${backoffDelay/1000}s`
+                                backoffDelay: `${backoffDelay / 1000}s`
                             });
                             setTimeout(() => {
                                 if (this.isRunning) {
@@ -285,25 +285,25 @@ export class PureRpcContractMonitor extends EventEmitter {
 
         // 添加随机延迟，分散API调用时间，避免所有交易员同时请求
         const randomDelay = Math.random() * 10000; // 0-10秒随机延迟
-        logger.debug(`${trader.label}将在${(randomDelay/1000).toFixed(1)}秒后开始轮询`, {
-            randomDelay: `${(randomDelay/1000).toFixed(1)}s`,
+        logger.debug(`${trader.label}将在${(randomDelay / 1000).toFixed(1)}秒后开始轮询`, {
+            randomDelay: `${(randomDelay / 1000).toFixed(1)}s`,
             reason: '分散API调用，避免429错误'
         });
-        
+
         setTimeout(pollTrader, randomDelay);
-        
+
         const interval = setInterval(pollTrader, this.POLLING_INTERVAL + Math.random() * 5000); // 轮询间隔也添加随机性
         this.pollingIntervals.push(interval);
     }
 
     private async pollTraderFills(trader: ContractTrader): Promise<void> {
         this.stats.totalRequests++;
-        
+
         // 扩大时间窗口，并添加重叠检查避免遗漏
         const lastProcessed = this.lastProcessedTime.get(trader.address) || Date.now() - 60 * 60 * 1000;
         const startTime = lastProcessed - (5 * 60 * 1000); // 向前重叠5分钟，避免遗漏
         const endTime = Date.now();
-        
+
         try {
             // 🔧 API速率限制检查 - 增强版
             const now = Date.now();
@@ -362,7 +362,7 @@ export class PureRpcContractMonitor extends EventEmitter {
 
                 // 🔍 关键修复：过滤历史订单
                 const recentFills = this.filterHistoricalOrders(fills);
-                
+
                 if (recentFills.length === 0) {
                     logger.debug(`📋 ${trader.label} 过滤后无新交易`);
                     return;
@@ -373,7 +373,7 @@ export class PureRpcContractMonitor extends EventEmitter {
 
                 // 检测新订单并查询完整信息
                 const newOrders = await this.detectAndFetchCompleteOrders(recentFills, trader);
-                
+
                 // 处理聚合后的订单（包括新检测到的完整订单）
                 for (const aggregatedOrder of newOrders) {
                     await this.processAggregatedOrder(aggregatedOrder, trader);
@@ -394,16 +394,16 @@ export class PureRpcContractMonitor extends EventEmitter {
             if (errorMessage.includes('429')) {
                 this.stats.totalErrors++;
                 this.stats.consecutiveErrors++;
-                
+
                 // 429错误需要更长的等待时间
                 const backoffDelay = Math.min(30000 * Math.pow(2, this.stats.consecutiveErrors), 300000); // 30s, 60s, 120s, 240s, 最大5分钟
                 logger.warn(`⚠️ ${trader.label} 触发API限制(429)，延长等待时间`, {
                     consecutiveErrors: this.stats.consecutiveErrors,
-                    backoffDelay: `${backoffDelay/1000}s`,
+                    backoffDelay: `${backoffDelay / 1000}s`,
                     nextRetry: new Date(Date.now() + backoffDelay).toISOString(),
                     recommendation: '考虑增加轮询间隔'
                 });
-                
+
                 // 更新最后处理时间，避免时间窗口过大
                 this.lastProcessedTime.set(trader.address, endTime);
                 throw new Error(`API_RATE_LIMITED_${backoffDelay}`);
@@ -464,7 +464,7 @@ export class PureRpcContractMonitor extends EventEmitter {
                     notional: `$${notionalValue.toFixed(2)}`,
                     eventPath: '基础事件路径'
                 });
-                
+
                 const signal = this.convertFillToContractSignal(fill, trader);
                 if (signal) {
                     signal.metadata = {
@@ -472,7 +472,7 @@ export class PureRpcContractMonitor extends EventEmitter {
                         source: 'pure-rpc-api',
                         enhanced: false
                     };
-                    
+
                     this.emit('contractEvent', signal, trader);
                     this.stats.totalEvents++;
                 }
@@ -490,7 +490,7 @@ export class PureRpcContractMonitor extends EventEmitter {
         const filteredFills = fills.filter(fill => {
             const fillTime = fill.time; // 已经是毫秒时间戳
             const isAfterStart = fillTime >= this.systemStartTime;
-            
+
             if (!isAfterStart) {
                 logger.debug(`⏭️ 跳过历史订单`, {
                     fillTime: new Date(fillTime).toISOString(),
@@ -499,10 +499,10 @@ export class PureRpcContractMonitor extends EventEmitter {
                     oid: fill.oid
                 });
             }
-            
+
             return isAfterStart;
         });
-        
+
         if (filteredFills.length < fills.length) {
             logger.info(`🔍 历史订单过滤`, {
                 totalFills: fills.length,
@@ -511,7 +511,7 @@ export class PureRpcContractMonitor extends EventEmitter {
                 systemStartTime: new Date(this.systemStartTime).toISOString()
             });
         }
-        
+
         return filteredFills;
     }
 
@@ -521,12 +521,12 @@ export class PureRpcContractMonitor extends EventEmitter {
     private aggregateFillsByOrder(fills: any[], trader: ContractTrader): any[] {
         const orderMap = new Map<number, any[]>();
         let duplicateCount = 0;
-        
+
         // 按oid分组，同时进行去重
         for (const fill of fills) {
             // 生成唯一标识符
             const fillId = fill.hash || fill.tid || `${fill.oid}_${fill.time}_${fill.sz}`;
-            
+
             // 检查是否已经处理过
             if (this.processedFills.has(fillId)) {
                 duplicateCount++;
@@ -538,14 +538,14 @@ export class PureRpcContractMonitor extends EventEmitter {
                 });
                 continue;
             }
-            
+
             if (!this.validateFill(fill, trader)) {
                 continue; // 跳过不符合条件的fill
             }
-            
+
             // 标记为已处理
             this.processedFills.add(fillId);
-            
+
             // 清理缓存，避免内存泄漏
             if (this.processedFills.size > this.MAX_CACHE_SIZE) {
                 const oldEntries = Array.from(this.processedFills).slice(0, 1000);
@@ -555,14 +555,14 @@ export class PureRpcContractMonitor extends EventEmitter {
                     remaining: this.processedFills.size
                 });
             }
-            
+
             const oid = fill.oid;
             if (!orderMap.has(oid)) {
                 orderMap.set(oid, []);
             }
             orderMap.get(oid)!.push(fill);
         }
-        
+
         if (duplicateCount > 0) {
             logger.info(`🔄 ${trader.label} 去重统计`, {
                 totalFills: fills.length,
@@ -571,21 +571,21 @@ export class PureRpcContractMonitor extends EventEmitter {
                 cacheSize: this.processedFills.size
             });
         }
-        
+
         // 为每个订单创建聚合对象
         const aggregatedOrders: any[] = [];
-        
+
         for (const [oid, orderFills] of orderMap.entries()) {
             if (orderFills.length === 0) continue;
-            
+
             // 按时间排序
             orderFills.sort((a, b) => a.time - b.time);
-            
+
             // 计算总量和平均价格
             const totalSize = orderFills.reduce((sum, fill) => sum + parseFloat(fill.sz), 0);
             const weightedPriceSum = orderFills.reduce((sum, fill) => sum + (parseFloat(fill.sz) * parseFloat(fill.px)), 0);
             const avgPrice = totalSize > 0 ? weightedPriceSum / totalSize : parseFloat(orderFills[0].px);
-            
+
             const aggregated = {
                 ...orderFills[0], // 使用第一个fill作为基础
                 sz: totalSize.toString(), // 更新为总量
@@ -596,9 +596,9 @@ export class PureRpcContractMonitor extends EventEmitter {
                 totalNotional: totalSize * avgPrice,
                 isAggregated: orderFills.length > 1
             };
-            
+
             aggregatedOrders.push(aggregated);
-            
+
             if (orderFills.length > 1) {
                 logger.info(`📋 ${trader.label} 订单聚合`, {
                     oid: oid,
@@ -611,7 +611,7 @@ export class PureRpcContractMonitor extends EventEmitter {
                 });
             }
         }
-        
+
         return aggregatedOrders;
     }
 
@@ -643,7 +643,7 @@ export class PureRpcContractMonitor extends EventEmitter {
 
             // 使用增强分类引擎处理交易
             const enhancedEvent = await this.classificationEngine.classifyTrade(
-                aggregatedOrder, 
+                aggregatedOrder,
                 trader,
                 8000,  // 8秒初始延迟等待交易结算
                 2      // 最多重试2次
@@ -660,7 +660,7 @@ export class PureRpcContractMonitor extends EventEmitter {
 
                 // 创建增强告警
                 const enhancedAlert = await this.alertSystem.createEnhancedAlert(enhancedEvent, trader);
-                
+
                 logger.info(`🚨 [调试] 即将发送增强告警`, {
                     trader: trader.label,
                     asset: enhancedEvent.asset,
@@ -697,46 +697,46 @@ export class PureRpcContractMonitor extends EventEmitter {
     private async detectAndFetchCompleteOrders(fills: any[], trader: ContractTrader): Promise<any[]> {
         const completeOrders: any[] = [];
         const newOrderIds: number[] = [];
-        
+
         // 收集所有新的订单ID
         for (const fill of fills) {
             if (!this.validateFill(fill, trader)) {
                 continue;
             }
-            
+
             const oid = fill.oid;
             if (!this.trackedOrders.has(oid) && !this.pendingOrderQueries.has(oid)) {
                 newOrderIds.push(oid);
                 this.trackedOrders.add(oid);
             }
         }
-        
+
         if (newOrderIds.length === 0) {
             return completeOrders;
         }
-        
+
         logger.info(`🔍 检测到${newOrderIds.length}个新订单`, {
             trader: trader.label,
             orderIds: newOrderIds.slice(0, 3), // 只显示前3个
             totalCount: newOrderIds.length
         });
-        
+
         // 限制并发查询数量，避免速率限制
         const MAX_CONCURRENT = 2;
         const chunks = [];
         for (let i = 0; i < newOrderIds.length; i += MAX_CONCURRENT) {
             chunks.push(newOrderIds.slice(i, i + MAX_CONCURRENT));
         }
-        
+
         // 分批处理订单查询
         for (const chunk of chunks) {
             const promises = chunk.map(oid => this.fetchCompleteOrderWithRateLimit(oid, trader));
             const results = await Promise.allSettled(promises);
-            
+
             for (let i = 0; i < results.length; i++) {
                 const result = results[i];
                 const oid = chunk[i];
-                
+
                 if (result.status === 'fulfilled' && result.value) {
                     completeOrders.push(result.value);
                     this.orderCompletionCache.set(oid, result.value);
@@ -749,20 +749,20 @@ export class PureRpcContractMonitor extends EventEmitter {
                     this.trackedOrders.delete(oid);
                 }
             }
-            
+
             // 在批次之间添加延迟
             if (chunks.indexOf(chunk) < chunks.length - 1) {
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
         }
-        
+
         if (completeOrders.length > 0) {
             logger.info(`✅ ${trader.label} 成功获取${completeOrders.length}个完整订单`, {
                 successCount: completeOrders.length,
                 totalRequested: newOrderIds.length
             });
         }
-        
+
         return completeOrders;
     }
 
@@ -774,7 +774,7 @@ export class PureRpcContractMonitor extends EventEmitter {
         if (this.pendingOrderQueries.has(oid)) {
             return await this.pendingOrderQueries.get(oid);
         }
-        
+
         // 速率限制检查
         const now = Date.now();
         const timeSinceLastCall = now - this.lastApiCall;
@@ -782,11 +782,11 @@ export class PureRpcContractMonitor extends EventEmitter {
             const waitTime = this.API_RATE_LIMIT_MS - timeSinceLastCall;
             await new Promise(resolve => setTimeout(resolve, waitTime));
         }
-        
+
         // 创建查询Promise并缓存
         const queryPromise = this.fetchCompleteOrderByOid(oid, trader);
         this.pendingOrderQueries.set(oid, queryPromise);
-        
+
         try {
             this.lastApiCall = Date.now();
             const result = await queryPromise;
@@ -805,13 +805,13 @@ export class PureRpcContractMonitor extends EventEmitter {
             // 使用更精确的时间范围，减少API负载
             const endTime = Date.now();
             const startTime = endTime - (6 * 60 * 60 * 1000); // 缩短到6小时，减少API压力
-            
+
             logger.debug(`🔎 查询订单${oid}的所有成交`, {
                 trader: trader.label,
                 oid: oid,
                 timeRange: '过去6小时'
             });
-            
+
             // 使用聚合模式减少返回数据量
             const allFills = await this.infoClient.userFillsByTime({
                 user: trader.address as `0x${string}`,
@@ -819,20 +819,20 @@ export class PureRpcContractMonitor extends EventEmitter {
                 endTime: endTime,
                 aggregateByTime: true // 使用聚合，减少数据量
             });
-            
+
             if (!allFills || allFills.length === 0) {
                 logger.debug(`📭 未找到订单${oid}的成交记录`, {
                     trader: trader.label
                 });
                 return null;
             }
-            
+
             // 筛选出属于该订单的填充
-            const orderFills = allFills.filter(fill => 
-                fill.oid === oid && 
+            const orderFills = allFills.filter(fill =>
+                fill.oid === oid &&
                 this.validateFill(fill, trader)
             );
-            
+
             if (orderFills.length === 0) {
                 logger.debug(`📭 订单${oid}没有有效的成交记录`, {
                     trader: trader.label,
@@ -840,11 +840,11 @@ export class PureRpcContractMonitor extends EventEmitter {
                 });
                 return null;
             }
-            
+
             // 创建完整订单对象
             const completeOrder = this.createCompleteOrderFromFills(orderFills, oid, trader);
             return completeOrder;
-            
+
         } catch (error) {
             // 特殊处理429错误
             if (error instanceof Error && error.message.includes('429')) {
@@ -853,7 +853,7 @@ export class PureRpcContractMonitor extends EventEmitter {
                 });
                 throw new Error('RATE_LIMITED');
             }
-            
+
             logger.error(`获取订单${oid}完整信息时出错`, {
                 trader: trader.label,
                 error: error instanceof Error ? error.message : error
@@ -868,13 +868,13 @@ export class PureRpcContractMonitor extends EventEmitter {
     private createCompleteOrderFromFills(orderFills: any[], oid: number, trader: ContractTrader): any {
         // 按时间排序
         orderFills.sort((a, b) => a.time - b.time);
-        
+
         // 计算订单总量和加权平均价格
         const totalSize = orderFills.reduce((sum, fill) => sum + parseFloat(fill.sz), 0);
-        const weightedPriceSum = orderFills.reduce((sum, fill) => 
+        const weightedPriceSum = orderFills.reduce((sum, fill) =>
             sum + (parseFloat(fill.sz) * parseFloat(fill.px)), 0);
         const avgPrice = totalSize > 0 ? weightedPriceSum / totalSize : parseFloat(orderFills[0].px);
-        
+
         const completeOrder = {
             ...orderFills[0], // 使用第一个fill作为基础
             sz: totalSize.toString(), // 更新为总量
@@ -885,11 +885,11 @@ export class PureRpcContractMonitor extends EventEmitter {
             totalNotional: totalSize * avgPrice,
             isAggregated: orderFills.length > 1,
             isCompleteOrder: true, // 标记为完整订单
-            fillsSpan: orderFills.length > 1 ? 
+            fillsSpan: orderFills.length > 1 ?
                 `${new Date(orderFills[0].time).toISOString()} - ${new Date(orderFills[orderFills.length - 1].time).toISOString()}` :
                 new Date(orderFills[0].time).toISOString()
         };
-        
+
         logger.info(`📊 ${trader.label} 订单${oid}完整统计`, {
             coin: completeOrder.coin,
             side: completeOrder.side,
@@ -899,7 +899,7 @@ export class PureRpcContractMonitor extends EventEmitter {
             totalNotional: `$${(totalSize * avgPrice).toFixed(2)}`,
             crossed: completeOrder.crossed
         });
-        
+
         return completeOrder;
     }
 
@@ -1055,9 +1055,9 @@ export class PureRpcContractMonitor extends EventEmitter {
                 tradesProcessed: this.stats.tradesProcessed,
                 consecutiveErrors: this.stats.consecutiveErrors,
                 lastSuccessfulPoll: Math.floor(timeSinceLastPoll / 1000) + 's ago',
-                successRate: this.stats.totalRequests > 0 ? 
+                successRate: this.stats.totalRequests > 0 ?
                     Math.round(((this.stats.totalRequests - this.stats.totalErrors) / this.stats.totalRequests) * 100) + '%' : 'N/A',
-                
+
                 // 增强功能统计
                 positionManager: this.positionManager.getStats(),
                 classificationEngine: this.classificationEngine.getStats(),
@@ -1101,9 +1101,9 @@ export class PureRpcContractMonitor extends EventEmitter {
             uptime: this.isRunning ? Date.now() - this.startTime : 0,
             pollingInterval: this.POLLING_INTERVAL,
             stats: this.stats,
-            successRate: this.stats.totalRequests > 0 ? 
+            successRate: this.stats.totalRequests > 0 ?
                 Math.round(((this.stats.totalRequests - this.stats.totalErrors) / this.stats.totalRequests) * 100) : 0,
-            
+
             // 增强功能统计
             enhancedFeatures: {
                 positionManager: this.positionManager.getStats(),
@@ -1131,7 +1131,7 @@ export class PureRpcContractMonitor extends EventEmitter {
                 address: trader.address.slice(0, 8) + '...',
                 lastProcessed: this.lastProcessedTime.get(trader.address) || 0
             })),
-            
+
             // 增强功能状态
             enhancedFeatures: {
                 positionManagerEnabled: true,
@@ -1149,16 +1149,16 @@ export class PureRpcContractMonitor extends EventEmitter {
     getTotalSubscriptions(): number {
         return this.traders.length;
     }
-    
+
     /**
      * 检测是否为网络错误
      */
     private isNetworkError(error: unknown): boolean {
         if (!error || typeof error !== 'object') return false;
-        
+
         const errorMessage = error instanceof Error ? error.message : String(error);
         const cause = (error as any).cause;
-        
+
         // 检查常见的网络错误标识
         const networkErrorPatterns = [
             'fetch failed',
@@ -1172,19 +1172,19 @@ export class PureRpcContractMonitor extends EventEmitter {
             'network error',
             'DNS error'
         ];
-        
+
         // 检查错误消息
-        const hasNetworkPattern = networkErrorPatterns.some(pattern => 
+        const hasNetworkPattern = networkErrorPatterns.some(pattern =>
             errorMessage.toLowerCase().includes(pattern.toLowerCase())
         );
-        
+
         // 检查 cause 对象中的网络错误
         if (cause && typeof cause === 'object') {
             const causeCode = (cause as any).code;
             const causeSyscall = (cause as any).syscall;
-            
-            if (causeCode === 'EAI_AGAIN' || 
-                causeCode === 'ENOTFOUND' || 
+
+            if (causeCode === 'EAI_AGAIN' ||
+                causeCode === 'ENOTFOUND' ||
                 causeCode === 'ECONNREFUSED' ||
                 causeCode === 'ECONNRESET' ||
                 causeCode === 'ETIMEDOUT' ||
@@ -1192,16 +1192,16 @@ export class PureRpcContractMonitor extends EventEmitter {
                 return true;
             }
         }
-        
+
         return hasNetworkPattern;
     }
-    
+
     /**
      * 带重试机制的API调用
      */
     private async fetchFillsWithRetry(trader: ContractTrader, startTime: number, endTime: number, maxRetries: number = 3): Promise<any[]> {
         let lastError: unknown;
-        
+
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 const fills = await this.infoClient.userFillsByTime({
@@ -1210,7 +1210,7 @@ export class PureRpcContractMonitor extends EventEmitter {
                     endTime: endTime,
                     aggregateByTime: true
                 });
-                
+
                 // 成功获取数据，重置错误计数
                 if (attempt > 1) {
                     logger.info(`✅ ${trader.label} API重试成功`, {
@@ -1218,19 +1218,19 @@ export class PureRpcContractMonitor extends EventEmitter {
                         maxRetries
                     });
                 }
-                
+
                 return fills || [];
-                
+
             } catch (error) {
                 lastError = error;
                 const isNetworkError = this.isNetworkError(error);
-                
+
                 logger.warn(`⚠️ ${trader.label} API调用失败 (尝试 ${attempt}/${maxRetries})`, {
                     error: error instanceof Error ? error.message : error,
                     isNetworkError,
                     willRetry: attempt < maxRetries
                 });
-                
+
                 // 如果是网络错误且还有重试机会，等待后重试
                 if (isNetworkError && attempt < maxRetries) {
                     const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // 1s, 2s, 4s, 最大5s
@@ -1238,14 +1238,14 @@ export class PureRpcContractMonitor extends EventEmitter {
                     await new Promise(resolve => setTimeout(resolve, delayMs));
                     continue;
                 }
-                
+
                 // 非网络错误或者达到最大重试次数，直接抛出
                 if (!isNetworkError || attempt >= maxRetries) {
                     throw error;
                 }
             }
         }
-        
+
         // 理论上不会到达这里，但为了类型安全
         throw lastError;
     }

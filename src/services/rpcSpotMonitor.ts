@@ -12,17 +12,17 @@ export class RpcSpotMonitor extends EventEmitter {
     private infoClient: hl.InfoClient;
     private isRunning = false;
     private pollingIntervals: NodeJS.Timeout[] = [];
-    
-    // 轮询配置
-    private readonly POLLING_INTERVAL = 30000; // 30秒轮询间隔
-    private readonly ERROR_RETRY_DELAY = 60000; // 错误重试延迟60秒
-    
+
+    // 轮询配置 - 优化API调用频率
+    private readonly POLLING_INTERVAL = 120000; // 增加到60秒轮询间隔，减少API压力
+    private readonly ERROR_RETRY_DELAY = 300000; // 错误重试延迟120秒
+
     // 追踪已处理的转账，避免重复
     private lastProcessedTime = new Map<string, number>();
     private processedTransfers = new Set<string>(); // 使用hash避免重复
     private readonly MAX_CACHE_SIZE = 5000;
     private startupTime: number; // 启动时间戳，用于过滤历史数据
-    
+
     // 统计信息
     private stats = {
         totalRequests: 0,
@@ -39,14 +39,14 @@ export class RpcSpotMonitor extends EventEmitter {
         this.addresses = addresses.filter(addr => addr.isActive);
         this.stats.addressesMonitored = this.addresses.length;
         this.startupTime = Date.now(); // 记录启动时间
-        
+
         // 初始化Info客户端
         const transport = new hl.HttpTransport({
             timeout: 30000,
             isTestnet: false
         });
         this.infoClient = new hl.InfoClient({ transport });
-        
+
         logger.info('🔧 RPC现货监听器初始化完成', {
             activeAddresses: this.addresses.length,
             pollingInterval: `${this.POLLING_INTERVAL / 1000}s`,
@@ -69,7 +69,7 @@ export class RpcSpotMonitor extends EventEmitter {
             // 测试API连接
             logger.info('🔧 测试Hyperliquid API连接...');
             const testMeta = await this.infoClient.meta();
-            
+
             if (testMeta) {
                 logger.info('✅ API连接成功', {
                     universeLength: testMeta.universe?.length || 0
@@ -128,18 +128,18 @@ export class RpcSpotMonitor extends EventEmitter {
             } catch (error) {
                 this.stats.totalErrors++;
                 this.stats.consecutiveErrors++;
-                
+
                 // 🔧 增强错误处理：区分网络错误和其他错误
                 const isNetworkError = this.isNetworkError(error);
                 const errorType = isNetworkError ? '网络错误' : '其他错误';
-                
+
                 logger.warn(`⚠️ ${address.label}现货监控${errorType}`, {
                     error: error instanceof Error ? error.message : error,
                     isNetworkError,
                     consecutiveErrors: this.stats.consecutiveErrors,
                     nextAction: isNetworkError ? '继续正常轮询' : '可能增加延迟'
                 });
-                
+
                 // 🔧 对于网络错误，更宽松的处理策略
                 if (isNetworkError) {
                     // 网络错误：记录但继续运行，不增加长延迟
@@ -173,7 +173,7 @@ export class RpcSpotMonitor extends EventEmitter {
 
         // 立即开始第一次轮询
         setTimeout(pollAddress, Math.random() * 5000); // 随机延迟0-5秒，避免所有地址同时查询
-        
+
         logger.info(`🔄 开始轮询${address.label}`, {
             address: address.address.slice(0, 6) + '...' + address.address.slice(-4),
             pollingInterval: `${this.POLLING_INTERVAL / 1000}s`
@@ -192,7 +192,7 @@ export class RpcSpotMonitor extends EventEmitter {
 
             const stats = this.getStats();
             const timeSinceLastPoll = Date.now() - this.stats.lastSuccessfulPoll;
-            
+
             logger.info('📊 RPC现货监听器状态报告', {
                 uptime: `${stats.uptime}s`,
                 isHealthy: timeSinceLastPoll < 120000, // 2分钟内有成功轮询
@@ -213,10 +213,10 @@ export class RpcSpotMonitor extends EventEmitter {
      */
     private async pollAddressTransfers(address: WatchedAddress): Promise<void> {
         this.stats.totalRequests++;
-        
+
         const endTime = Date.now();
         const startTime = this.lastProcessedTime.get(address.address) || (endTime - 3600000); // 默认查询1小时内
-        
+
         try {
             // 查询账本更新（包含转账记录）
             const ledgerUpdates = await this.infoClient.userNonFundingLedgerUpdates({
@@ -249,15 +249,15 @@ export class RpcSpotMonitor extends EventEmitter {
             logger.error(`❌ 查询${address.label}账本更新失败:`, error);
             throw error;
         }
-        
+
         // 记录轮询活动（每小时记录一次以证明程序在运行）
         const now = Date.now();
         const lastHeartbeat = this.lastProcessedTime.get(`${address.address}_heartbeat`) || 0;
         if (now - lastHeartbeat > 3600000) { // 1小时
             logger.info(`💓 ${address.label}轮询心跳`, {
                 lastCheck: new Date(endTime).toISOString(),
-                noActivitySince: this.lastProcessedTime.get(address.address) 
-                    ? new Date(this.lastProcessedTime.get(address.address)!).toISOString() 
+                noActivitySince: this.lastProcessedTime.get(address.address)
+                    ? new Date(this.lastProcessedTime.get(address.address)!).toISOString()
                     : '系统启动'
             });
             this.lastProcessedTime.set(`${address.address}_heartbeat`, now);
@@ -281,7 +281,7 @@ export class RpcSpotMonitor extends EventEmitter {
 
             // 生成唯一标识，避免重复处理
             const updateHash = `${address.address}_${update.time}_${update.hash || update.delta?.USDC || update.delta?.coin}`;
-            
+
             if (this.processedTransfers.has(updateHash)) {
                 return; // 已处理过
             }
@@ -293,7 +293,7 @@ export class RpcSpotMonitor extends EventEmitter {
 
             // 解析转账信息
             const transferEvent = this.parseTransferUpdate(update, address);
-            
+
             if (transferEvent) {
                 // 检查金额阈值
                 const notionalValue = parseFloat(transferEvent.amount);
@@ -301,7 +301,7 @@ export class RpcSpotMonitor extends EventEmitter {
                     this.processedTransfers.add(updateHash);
                     this.stats.totalEvents++;
                     this.stats.transfersProcessed++;
-                    
+
                     logger.info(`💰 检测到现货转账`, {
                         address: address.label,
                         eventType: transferEvent.eventType,
@@ -327,7 +327,7 @@ export class RpcSpotMonitor extends EventEmitter {
      */
     private isTransferUpdate(update: any): boolean {
         if (!update.delta) return false;
-        
+
         // 检查更新类型 - 扩展的转账类型识别
         const transferTypes = [
             'spotTransfer',     // 现货转账
@@ -338,17 +338,17 @@ export class RpcSpotMonitor extends EventEmitter {
             'accountClassTransfer', // 账户类别转账
             'subAccountTransfer'    // 子账户转账
         ];
-        
+
         // 检查delta.type
         if (update.delta.type && transferTypes.includes(update.delta.type)) {
             return true;
         }
-        
+
         // 检查传统的余额变化格式
         if (update.delta.USDC || update.delta.coin) {
             return true;
         }
-        
+
         return false;
     }
 
@@ -369,14 +369,14 @@ export class RpcSpotMonitor extends EventEmitter {
                     asset = update.delta.token || 'UNKNOWN';
                     amount = Math.abs(parseFloat(update.delta.amount || '0')).toString();
                     usdcValue = parseFloat(update.delta.usdcValue || '0');
-                    
+
                     // 判断转账方向
                     if (update.delta.user === address.address) {
                         eventType = 'transfer_out'; // 该地址是发送方
                     } else if (update.delta.destination === address.address) {
                         eventType = 'transfer_in';  // 该地址是接收方
                     }
-                    
+
                     logger.debug(`🔄 现货转账解析`, {
                         asset, amount, usdcValue, eventType,
                         user: update.delta.user,
@@ -402,7 +402,7 @@ export class RpcSpotMonitor extends EventEmitter {
                     asset = update.delta.token || 'HYPE';
                     amount = Math.abs(parseFloat(update.delta.amount || '0')).toString();
                     eventType = update.delta.isDeposit ? 'deposit' : 'withdraw';
-                    
+
                     // 估算HYPE的价值（使用历史价格或固定估算）
                     if (asset === 'HYPE') {
                         usdcValue = parseFloat(amount) * 40; // 估算$40/HYPE
@@ -413,7 +413,7 @@ export class RpcSpotMonitor extends EventEmitter {
                     asset = 'USDC';
                     amount = Math.abs(parseFloat(update.delta.usdc || '0')).toString();
                     usdcValue = parseFloat(amount);
-                    
+
                     if (update.delta.user === address.address) {
                         eventType = 'transfer_out';
                     } else {
@@ -479,7 +479,7 @@ export class RpcSpotMonitor extends EventEmitter {
             const entries = Array.from(this.processedTransfers);
             const toRemove = entries.slice(0, this.MAX_CACHE_SIZE * 0.2); // 移除20%
             toRemove.forEach(entry => this.processedTransfers.delete(entry));
-            
+
             logger.debug(`🧹 清理转账缓存`, {
                 removed: toRemove.length,
                 remaining: this.processedTransfers.size
@@ -492,7 +492,7 @@ export class RpcSpotMonitor extends EventEmitter {
      */
     getStats() {
         const uptime = this.stats.lastSuccessfulPoll ? Date.now() - this.stats.lastSuccessfulPoll : 0;
-        const successRate = this.stats.totalRequests > 0 
+        const successRate = this.stats.totalRequests > 0
             ? Math.round(((this.stats.totalRequests - this.stats.totalErrors) / this.stats.totalRequests) * 100)
             : 0;
 
@@ -509,16 +509,16 @@ export class RpcSpotMonitor extends EventEmitter {
             }))
         };
     }
-    
+
     /**
      * 检测是否为网络错误
      */
     private isNetworkError(error: unknown): boolean {
         if (!error || typeof error !== 'object') return false;
-        
+
         const errorMessage = error instanceof Error ? error.message : String(error);
         const cause = (error as any).cause;
-        
+
         // 检查常见的网络错误标识
         const networkErrorPatterns = [
             'fetch failed',
@@ -532,19 +532,19 @@ export class RpcSpotMonitor extends EventEmitter {
             'network error',
             'DNS error'
         ];
-        
+
         // 检查错误消息
-        const hasNetworkPattern = networkErrorPatterns.some(pattern => 
+        const hasNetworkPattern = networkErrorPatterns.some(pattern =>
             errorMessage.toLowerCase().includes(pattern.toLowerCase())
         );
-        
+
         // 检查 cause 对象中的网络错误
         if (cause && typeof cause === 'object') {
             const causeCode = (cause as any).code;
             const causeSyscall = (cause as any).syscall;
-            
-            if (causeCode === 'EAI_AGAIN' || 
-                causeCode === 'ENOTFOUND' || 
+
+            if (causeCode === 'EAI_AGAIN' ||
+                causeCode === 'ENOTFOUND' ||
                 causeCode === 'ECONNREFUSED' ||
                 causeCode === 'ECONNRESET' ||
                 causeCode === 'ETIMEDOUT' ||
@@ -552,7 +552,7 @@ export class RpcSpotMonitor extends EventEmitter {
                 return true;
             }
         }
-        
+
         return hasNetworkPattern;
     }
 }
