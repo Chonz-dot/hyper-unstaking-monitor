@@ -149,25 +149,58 @@ export class WebhookNotifier {
     const flowIcon = isTransferIn ? '⬇️' : '⬆️';
 
     // 为转账添加区块浏览器链接
-    const createTransferTxLink = (txHash: string) => {
-      // Hyperliquid主网区块浏览器链接
+    const createTransferTxLink = (txHash: string, metadata: any) => {
+      // 检查是否是内部操作
+      const isInternal = metadata?.isInternalOperation ||
+        txHash.startsWith('internal_') ||
+        txHash.startsWith('ledger_') ||
+        txHash === '0x0000000000000000000000000000000000000000000000000000000000000000';
+
+      if (isInternal) {
+        // 对于内部操作，链接到地址页面而不是交易页面
+        return `https://app.hyperliquid.xyz/trade/${alert.address}`;
+      }
+
+      // 正常交易链接到区块浏览器
       return `https://hypurrscan.io/tx/${txHash}`;
     };
 
-    const transferTxLink = createTransferTxLink(alert.txHash);
+    const transferTxLink = createTransferTxLink(alert.txHash, alert.metadata);
+
+    // 检查是否是内部操作，调整显示文本
+    const isInternalOp = alert.metadata?.isInternalOperation ||
+      alert.txHash.startsWith('internal_') ||
+      alert.txHash.startsWith('ledger_') ||
+      alert.txHash === '0x0000000000000000000000000000000000000000000000000000000000000000';
+
+    const txLinkText = isInternalOp ? 'Account Page' : 'Transaction';
+    const operationType = alert.metadata?.transferType || 'transfer';
+    const operationText = isInternalOp ? `${operationType} (Internal)` : 'Blockchain Transaction';
+    
+    // 🆕 处理代币信息和价格
+    const asset = alert.metadata?.originalAsset || 'HYPE';
+    const priceDisplay = alert.priceInfo?.formattedPrice || '';
+    const tokenDisplay = priceDisplay ? `${asset} (${priceDisplay})` : asset;
+    
+    // 🆕 USD价值信息
+    const currentUsdValue = alert.priceInfo?.formattedValue || '';
+    const cumulativeUsdValue = alert.cumulativePriceInfo?.formattedValue || '';
 
     // 统一的美化消息格式 - 与合约警报一致的风格
     const messageLines = [
       `${alertEmoji} **${signalType}**: ${thresholdType} ${actionText} ${flowIcon}`,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `🌐 **Network**: Hyperliquid`,
-      `💰 **Token**: HYPE ${directionEmoji}`,
+      `💰 **Token**: ${tokenDisplay} ${directionEmoji}`,
       `📊 **Amount**: ${formatAmount(alert.amount)}${calculatePercentage(alert.amount, alert.unlockAmount)}`,
+      `${currentUsdValue ? `💵 **USD Value**: ${currentUsdValue}` : ''}`,
       `🏠 **Address**: ${alert.address.slice(0, 6)}...${alert.address.slice(-4)} (${alert.addressLabel || 'Unknown'})`,
       `${alert.unlockAmount ? `🔓 **Unlock Total**: ${formatAmount(alert.unlockAmount.toString())} HYPE` : ''}`,
-      `🔗 **Transaction**: ${transferTxLink}`,
+      `🔗 **${txLinkText}**: ${transferTxLink}`,
+      `⚙️ **Operation**: ${operationText}`,
       `⏰ **Time**: ${new Date(alert.blockTime * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`,
-      `${alert.cumulativeToday ? `📈 **24h Cumulative**: ${formatAmount(alert.cumulativeToday)} HYPE` : ''}`,
+      `${alert.cumulativeToday ? `📈 **24h Cumulative**: ${formatAmount(alert.cumulativeToday)} ${asset}` : ''}`,
+      `${cumulativeUsdValue ? `💰 **Cumulative USD**: ${cumulativeUsdValue}` : ''}`,
     ].filter(line => line !== ''); // 过滤空行
 
     // 优化的 payload，适配主题化设计
@@ -346,6 +379,26 @@ export class WebhookNotifier {
     const mergedInfo = isMergedEvent ?
       `Merged: ${alert.mergedCount} trades combined` : '';
 
+    // 🆕 格式化统计信息
+    const statsInfo = alert.traderStats ? [
+      `📊 **Trading Stats** (${alert.traderStats.monitoringDays} monitoring)`,
+      `🎯 **Total Trades**: ${alert.traderStats.totalTrades} | 🏆 **Win Rate**: ${alert.traderStats.winRate}`,
+      `💰 **Total P&L**: ${alert.traderStats.totalRealizedPnL} | 📈 **Volume**: ${alert.traderStats.totalVolume}`,
+      `🎮 **Performance**: ${alert.traderStats.performance}`
+    ].join('\n') : '';
+
+    // 🆕 开仓信息
+    const positionInfo = alert.positionInfo ? [
+      `💼 **Position Info**`,
+      `💵 **Total Notional**: ${alert.positionInfo.totalNotional}`,
+      `📍 **Entry Price**: $${alert.positionInfo.entryPrice}`
+    ].join('\n') : '';
+
+    // 🆕 平仓盈亏信息
+    const pnlInfo = (alert.realizedPnL !== undefined && alert.alertType === 'position_close') ? [
+      `💰 **Realized P&L**: ${alert.realizedPnL >= 0 ? '+' : ''}$${alert.realizedPnL.toFixed(2)} ${alert.realizedPnL >= 0 ? '🟢' : '🔴'}`
+    ].join('\n') : '';
+
     // 修复交易哈希链接生成逻辑
     const createTxLink = (txHash: string, address: string) => {
       // 检查是否为真实交易哈希（64字符的有效十六进制且不是全零）
@@ -388,6 +441,9 @@ export class WebhookNotifier {
       `${mergedInfo ? `🔗 **${mergedInfo}**` : ''}`,
       `⏰ **Time**: ${new Date(alert.blockTime * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`,
       `🔍 **Tx**: ${txLink}`,
+      `${pnlInfo ? `\n${pnlInfo}` : ''}`,
+      `${positionInfo ? `\n${positionInfo}` : ''}`,
+      `${statsInfo ? `\n${statsInfo}` : ''}`,
     ].filter(line => line !== '' && !line.includes('**:**')).join('\n');
 
     // 使用Rocket.Chat特定的格式，禁用link preview

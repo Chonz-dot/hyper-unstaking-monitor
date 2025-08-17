@@ -451,7 +451,7 @@ export class RpcSpotMonitor extends EventEmitter {
                 address: address.address,
                 eventType,
                 amount,
-                hash: update.hash || `ledger_${update.time}_${address.address}`,
+                hash: this.generateProperHash(update, address),
                 blockTime,
                 asset,
                 metadata: {
@@ -461,7 +461,9 @@ export class RpcSpotMonitor extends EventEmitter {
                     unlockAmount: address.unlockAmount,
                     usdcValue: usdcValue.toString(),
                     transferType: update.delta?.type || 'unknown',
-                    delta: update.delta
+                    delta: update.delta,
+                    originalHash: update.hash, // 保存原始哈希用于调试
+                    isInternalOperation: this.isInternalOperation(update.hash)
                 }
             };
 
@@ -469,6 +471,34 @@ export class RpcSpotMonitor extends EventEmitter {
             logger.error(`❌ 解析转账更新失败:`, error, { update });
             return null;
         }
+    }
+
+    /**
+     * 生成合适的交易哈希
+     */
+    private generateProperHash(update: any, address: WatchedAddress): string {
+        const originalHash = update.hash;
+        
+        // 检查是否是全零哈希或无效哈希
+        if (!originalHash || originalHash === '0x0000000000000000000000000000000000000000000000000000000000000000' || originalHash === '0x') {
+            // 对于内部操作，生成一个更描述性的标识符
+            const transferType = update.delta?.type || 'unknown';
+            const timestamp = update.time || Date.now();
+            return `internal_${transferType}_${timestamp}_${address.address.slice(-8)}`;
+        }
+        
+        return originalHash;
+    }
+    
+    /**
+     * 判断是否是内部操作（如质押、内部转账等）
+     */
+    private isInternalOperation(hash: string): boolean {
+        return !hash || 
+               hash === '0x0000000000000000000000000000000000000000000000000000000000000000' || 
+               hash === '0x' ||
+               hash.startsWith('internal_') ||
+               hash.startsWith('ledger_');
     }
 
     /**

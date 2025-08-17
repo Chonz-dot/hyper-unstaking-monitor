@@ -1,6 +1,7 @@
 import { MonitorEvent, AlertRule, WebhookAlert, WatchedAddress } from '../types';
 import CacheManager from '../cache';
 import WebhookNotifier from '../webhook';
+import PriceService from '../services/PriceService';
 import logger from '../logger';
 import config from '../config';
 
@@ -8,11 +9,13 @@ export class AlertEngine {
   private rules: AlertRule[];
   private cache: CacheManager;
   private notifier: WebhookNotifier;
+  private priceService: PriceService;
   private addressMap: Map<string, WatchedAddress>;
 
   constructor(cache: CacheManager, notifier: WebhookNotifier) {
     this.cache = cache;
     this.notifier = notifier;
+    this.priceService = new PriceService();
     this.addressMap = new Map();
     
     // 初始化地址映射
@@ -97,6 +100,12 @@ export class AlertEngine {
         ? 'single_transfer_in' as const
         : 'single_transfer_out' as const;
 
+      // 🆕 获取价格信息
+      const priceInfo = await this.priceService.calculateUsdValue(
+        event.amount, 
+        event.asset || 'USDC'
+      );
+
       const alert: WebhookAlert = {
         timestamp: event.timestamp,
         alertType,
@@ -106,12 +115,22 @@ export class AlertEngine {
         txHash: event.hash,
         blockTime: event.blockTime,
         unlockAmount: addressInfo.unlockAmount > 0 ? addressInfo.unlockAmount : undefined,
+        metadata: event.metadata,
+        // 🆕 添加价格信息
+        priceInfo: {
+          tokenPrice: priceInfo.price,
+          usdValue: priceInfo.usdValue,
+          formattedPrice: priceInfo.formattedPrice,
+          formattedValue: priceInfo.formattedValue
+        }
       };
 
       logger.info('触发单笔转账预警', {
         address: event.address,
         label: addressInfo.label,
         amount: event.amount,
+        asset: event.asset,
+        usdValue: priceInfo.formattedValue,
         threshold,
         alertType
       });
@@ -142,6 +161,17 @@ export class AlertEngine {
         ? 'cumulative_transfer_in' as const
         : 'cumulative_transfer_out' as const;
 
+      // 🆕 获取价格信息（单次和累计）
+      const currentPriceInfo = await this.priceService.calculateUsdValue(
+        event.amount, 
+        event.asset || 'USDC'
+      );
+      
+      const cumulativePriceInfo = await this.priceService.calculateUsdValue(
+        cumulativeAmount.toString(), 
+        event.asset || 'USDC'
+      );
+
       const alert: WebhookAlert = {
         timestamp: event.timestamp,
         alertType,
@@ -152,13 +182,27 @@ export class AlertEngine {
         blockTime: event.blockTime,
         cumulativeToday: direction === 'in' ? dailyCache.totalInbound : dailyCache.totalOutbound,
         unlockAmount: addressInfo.unlockAmount > 0 ? addressInfo.unlockAmount : undefined,
+        metadata: event.metadata,
+        // 🆕 添加价格信息
+        priceInfo: {
+          tokenPrice: currentPriceInfo.price,
+          usdValue: currentPriceInfo.usdValue,
+          formattedPrice: currentPriceInfo.formattedPrice,
+          formattedValue: currentPriceInfo.formattedValue
+        },
+        cumulativePriceInfo: {
+          usdValue: cumulativePriceInfo.usdValue,
+          formattedValue: cumulativePriceInfo.formattedValue
+        }
       };
 
       logger.info('触发累计转账预警', {
         address: event.address,
         label: addressInfo.label,
         currentAmount: event.amount,
+        currentUsdValue: currentPriceInfo.formattedValue,
         cumulativeAmount,
+        cumulativeUsdValue: cumulativePriceInfo.formattedValue,
         threshold,
         alertType,
         direction

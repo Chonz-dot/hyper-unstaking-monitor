@@ -86,6 +86,30 @@ export interface WebhookAlert {
   blockTime: number;
   cumulativeToday?: string; // 今日累计（仅累计警报）
   unlockAmount?: number; // 该地址的解锁数量
+  metadata?: {
+    originalAsset?: string;
+    source?: string;
+    addressLabel?: string;
+    unlockAmount?: number;
+    usdcValue?: string;
+    transferType?: string;
+    delta?: any;
+    originalHash?: string;
+    isInternalOperation?: boolean;
+    [key: string]: any; // 允许其他字段
+  };
+  // 🆕 价格信息
+  priceInfo?: {
+    tokenPrice: number | null;
+    usdValue: number | null;
+    formattedPrice: string;
+    formattedValue: string;
+  };
+  // 🆕 累计价格信息（仅累计警报）
+  cumulativePriceInfo?: {
+    usdValue: number | null;
+    formattedValue: string;
+  };
 }
 
 // 合约交易Webhook警报格式
@@ -106,6 +130,22 @@ export interface ContractWebhookAlert {
   mergedCount?: number;
   originalFillsCount?: number;
   isMerged?: boolean;
+  // 🆕 交易员统计信息
+  traderStats?: {
+    totalTrades: string;      // 累计交易次数
+    winRate: string;          // 胜率
+    totalRealizedPnL: string; // 累计盈亏
+    totalVolume: string;      // 累计交易量
+    monitoringDays: string;   // 监控天数
+    performance: string;      // 表现状态
+  };
+  // 🆕 当前开仓信息（仅开仓事件）
+  positionInfo?: {
+    totalNotional: string;    // 开仓总金额
+    entryPrice: string;       // 成本价格
+  };
+  // 🆕 平仓盈亏信息（仅平仓事件）
+  realizedPnL?: number;
 }
 
 // 缓存数据接口

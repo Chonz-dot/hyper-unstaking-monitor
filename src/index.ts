@@ -6,6 +6,7 @@ import RpcContractMonitor from './services/rpcContractMonitor';
 import HybridRpcContractMonitor from './services/hybridRpcContractMonitor';
 import PureRpcContractMonitor from './services/pureRpcContractMonitor';
 import RpcSpotMonitor from './services/rpcSpotMonitor';
+import TraderStatsService from './services/TraderStatsService';
 import AlertEngine from './engine/alert-engine';
 import CacheManager from './cache';
 import WebhookNotifier from './webhook';
@@ -22,6 +23,7 @@ class TraderMonitor {
   private alertEngine: AlertEngine;
   private cache: CacheManager;
   private notifier: WebhookNotifier;
+  private traderStats: TraderStatsService;
   private isRunning = false;
   private startTime = 0;
 
@@ -30,6 +32,7 @@ class TraderMonitor {
     this.cache = new CacheManager();
     this.notifier = new WebhookNotifier();
     this.alertEngine = new AlertEngine(this.cache, this.notifier);
+    this.traderStats = new TraderStatsService();
 
     // 如果启用了合约监控，初始化合约监控器
     logger.info('🔧 检查合约监控配置', {
@@ -117,6 +120,9 @@ class TraderMonitor {
 
       // 连接Redis
       await this.cache.connect();
+      
+      // 连接TraderStats Redis
+      await this.traderStats.connect();
 
       // 更新监控状态
       await this.cache.updateMonitoringStatus({
@@ -250,6 +256,16 @@ class TraderMonitor {
         eventPath: '主处理器接收事件'
       });
 
+      // 📊 更新交易统计
+      await this.updateTraderStats(event, trader);
+
+      // 🆕 获取统计数据并添加到事件中
+      const stats = await this.traderStats.getTraderStats(trader.address);
+      const formattedStats = this.traderStats.formatStatsForDisplay(stats);
+      
+      // 将统计数据添加到事件中
+      event.traderStats = formattedStats;
+
       // 直接发送增强告警（已经是格式化的告警对象）
       await this.notifier.sendContractAlert(event);
       
@@ -257,11 +273,63 @@ class TraderMonitor {
       logger.info('✅ [调试] 合约事件已发送到webhook', {
         trader: trader.label,
         alertType: event.alertType || event.eventType,
-        enhanced: event.enhanced || false
+        enhanced: event.enhanced || false,
+        totalTrades: formattedStats.totalTrades,
+        winRate: formattedStats.winRate
       });
 
     } catch (error) {
       logger.error('处理合约事件失败:', error, { event, trader });
+    }
+  }
+
+  /**
+   * 更新交易员统计数据
+   */
+  private async updateTraderStats(event: any, trader: ContractTrader): Promise<void> {
+    try {
+      const notionalValue = parseFloat(event.notionalValue || event.size || '0') * parseFloat(event.price || '0');
+      const alertType = event.alertType || event.eventType;
+      
+      // 确定交易类型
+      let tradeType: 'open' | 'close' | 'increase' | 'decrease' = 'open';
+      if (alertType.includes('close')) {
+        tradeType = 'close';
+      } else if (alertType.includes('increase')) {
+        tradeType = 'increase';
+      } else if (alertType.includes('decrease')) {
+        tradeType = 'decrease';
+      }
+
+      // 获取盈亏信息（如果是平仓）
+      let realizedPnL: number | undefined;
+      if (tradeType === 'close' && event.realizedPnL !== undefined) {
+        realizedPnL = parseFloat(event.realizedPnL);
+      }
+
+      // 记录交易
+      await this.traderStats.recordTrade(
+        trader.address,
+        event.asset,
+        notionalValue,
+        tradeType,
+        realizedPnL
+      );
+
+      // 如果是开仓，记录持仓信息
+      if (tradeType === 'open') {
+        await this.traderStats.recordPosition(trader.address, event.asset, {
+          asset: event.asset,
+          size: parseFloat(event.size || '0'),
+          entryPrice: parseFloat(event.price || '0'),
+          totalNotional: notionalValue,
+          openTime: Date.now(),
+          unrealizedPnL: 0
+        });
+      }
+
+    } catch (error) {
+      logger.error('更新交易员统计失败:', error);
     }
   }
 
@@ -279,6 +347,9 @@ class TraderMonitor {
 
       // 断开Redis连接
       await this.cache.disconnect();
+      
+      // 断开TraderStats Redis连接
+      await this.traderStats.disconnect();
 
       logger.info('清理完成');
 
