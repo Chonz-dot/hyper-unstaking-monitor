@@ -76,7 +76,7 @@ async function testPhase2Features() {
                 },
                 classificationEngine: {
                     total: stats.enhancedFeatures.classificationEngine.totalClassifications,
-                    successRate: stats.enhancedFeatures.classificationEngine.successRate + '%'
+                    errors: stats.enhancedFeatures.classificationEngine.errors
                 },
                 analysisEngine: {
                     totalAnalysis: stats.enhancedFeatures.analysisEngine.totalAnalysis,
@@ -84,7 +84,7 @@ async function testPhase2Features() {
                 },
                 alertSystem: {
                     totalAlerts: stats.enhancedFeatures.alertSystem.totalAlerts,
-                    enhancedRate: stats.enhancedFeatures.alertSystem.enhancedRate + '%'
+                    advancedRate: stats.enhancedFeatures.alertSystem.advancedRate + '%'
                 }
             });
         };

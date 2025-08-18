@@ -250,7 +250,7 @@ class TraderMonitor {
         asset: event.asset,
         size: event.size,
         side: event.side,
-        enhanced: event.enhanced || false,
+        useAdvancedAnalysis: event.useAdvancedAnalysis || false,
         alertLevel: event.alertLevel || 'basic',
         source: event.metadata?.source || 'unknown',
         eventPath: '主处理器接收事件'
@@ -266,14 +266,14 @@ class TraderMonitor {
       // 将统计数据添加到事件中
       event.traderStats = formattedStats;
 
-      // 直接发送增强告警（已经是格式化的告警对象）
+      // 统一发送交易分析告警（已经是格式化的告警对象）
       await this.notifier.sendContractAlert(event);
       
       // 🔍 调试日志：确认发送
       logger.info('✅ [调试] 合约事件已发送到webhook', {
         trader: trader.label,
         alertType: event.alertType || event.eventType,
-        enhanced: event.enhanced || false,
+        useAdvancedAnalysis: event.useAdvancedAnalysis || false,
         totalTrades: formattedStats.totalTrades,
         winRate: formattedStats.winRate
       });
@@ -301,10 +301,35 @@ class TraderMonitor {
         tradeType = 'decrease';
       }
 
+      // 🔧 添加交易类型识别调试
+      logger.info('🔍 [调试] 交易类型识别', {
+        trader: trader.label,
+        asset: event.asset,
+        originalAlertType: alertType,
+        determinedTradeType: tradeType,
+        includesClose: alertType.includes('close'),
+        includesIncrease: alertType.includes('increase'),
+        includesDecrease: alertType.includes('decrease')
+      });
+
       // 获取盈亏信息（如果是平仓）
       let realizedPnL: number | undefined;
       if (tradeType === 'close' && event.realizedPnL !== undefined) {
-        realizedPnL = parseFloat(event.realizedPnL);
+        realizedPnL = parseFloat(event.realizedPnL.toString());
+        logger.info('📊 [调试] 发现平仓盈亏数据', {
+          trader: trader.label,
+          asset: event.asset,
+          realizedPnL: realizedPnL,
+          eventType: event.alertType || event.eventType
+        });
+      } else if (tradeType === 'close') {
+        logger.warn('⚠️ [调试] 平仓事件缺少盈亏数据', {
+          trader: trader.label,
+          asset: event.asset,
+          hasRealizedPnL: event.realizedPnL !== undefined,
+          eventRealizedPnL: event.realizedPnL,
+          eventType: event.alertType || event.eventType
+        });
       }
 
       // 记录交易

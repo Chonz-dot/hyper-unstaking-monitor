@@ -1,26 +1,26 @@
 import { PositionAnalysisReport, PositionAnalysisEngine } from './PositionAnalysisEngine';
-import { EnhancedContractEvent } from './TradeClassificationEngine';
+import { AnalyzedContractEvent } from './TradeClassificationEngine';
 import { ContractTrader, ContractWebhookAlert } from '../types';
 import { formatTradeSize, formatPrice, formatCurrency, formatChange } from '../utils/formatters';
 import TraderStatsService from '../services/TraderStatsService';
 import logger from '../logger';
 
 /**
- * 增强告警系统
+ * 交易分析系统
  * 集成持仓分析结果，生成丰富的智能告警
  */
-export class EnhancedAlertSystem {
+export class TradingAnalysisSystem {
     private analysisEngine: PositionAnalysisEngine;
     private traderStats: TraderStatsService;
 
     // 配置选项
-    private config: EnhancedAlertConfig = {
+    private config: TradingAnalysisConfig = {
         enablePositionAnalysis: true,
-        analysisThreshold: 10,             // 降低到 $10，更容易触发分析
-        maxDailyAnalysis: 20,              // 增加到每日20次
-        detailLevel: 'enhanced',           // 详细程度
-        includeRiskWarnings: false,        // 关闭风险警告
-        includeStrategicInsights: false,   // 关闭策略洞察
+        analysisThreshold: 0,                  // 设置为0，分析所有交易
+        maxDailyAnalysis: 100,                 // 增加到每日100次
+        detailLevel: 'advanced',               // 详细程度
+        includeRiskWarnings: false,            // 关闭风险警告
+        includeStrategicInsights: false,       // 关闭策略洞察
         customEmojis: true
     };
 
@@ -29,20 +29,20 @@ export class EnhancedAlertSystem {
 
     private stats = {
         totalAlerts: 0,
-        enhancedAlerts: 0,
+        advancedAlerts: 0,
         basicAlerts: 0,
         analysisSkipped: 0,
         errors: 0
     };
 
-    constructor(analysisEngine: PositionAnalysisEngine, config?: Partial<EnhancedAlertConfig>) {
+    constructor(analysisEngine: PositionAnalysisEngine, config?: Partial<TradingAnalysisConfig>) {
         this.analysisEngine = analysisEngine;
         this.traderStats = new TraderStatsService();
         if (config) {
             this.config = { ...this.config, ...config };
         }
 
-        logger.info('🚨 增强告警系统初始化完成', {
+        logger.info('🚨 交易分析系统初始化完成', {
             config: this.config
         });
     }
@@ -52,59 +52,54 @@ export class EnhancedAlertSystem {
      */
     async initialize(): Promise<void> {
         await this.traderStats.connect();
-        logger.info('🎯 增强告警系统统计服务已连接');
+        logger.info('🎯 交易分析系统统计服务已连接');
     }
 
     /**
-     * 创建增强告警
+     * 创建交易分析告警
      */
-    async createEnhancedAlert(
-        event: EnhancedContractEvent,
+    async createTradingAlert(
+        event: AnalyzedContractEvent,
         trader: ContractTrader
-    ): Promise<EnhancedWebhookAlert> {
+    ): Promise<TradingWebhookAlert> {
         try {
             this.stats.totalAlerts++;
 
             const notionalValue = parseFloat(event.metadata?.notionalValue || '0');
-            const shouldAnalyze = this.shouldPerformAnalysis(trader, notionalValue, event);
 
-            logger.debug(`🔍 处理增强告警`, {
+            logger.debug(`🔍 处理交易分析告警`, {
                 trader: trader.label,
                 asset: event.asset,
                 eventType: event.eventType,
-                notional: notionalValue,
-                shouldAnalyze
+                notional: notionalValue
             });
 
-            if (shouldAnalyze) {
-                return await this.createAnalysisEnhancedAlert(event, trader);
-            } else {
-                return this.createBasicEnhancedAlert(event, trader);
-            }
+            // 🔧 统一使用分析模式，不再区分基础和高级
+            return await this.createAnalysisAlert(event, trader);
 
         } catch (error) {
             this.stats.errors++;
-            logger.error(`❌ 创建增强告警失败`, {
+            logger.error(`❌ 创建交易告警失败`, {
                 trader: trader.label,
                 error: error instanceof Error ? error.message : error
             });
 
             // 降级到基础告警
-            return this.createBasicEnhancedAlert(event, trader);
+            return this.createBasicAlert(event, trader);
         }
     }
 
     /**
-     * 创建带持仓分析的增强告警
+     * 创建带持仓分析的告警
      */
-    private async createAnalysisEnhancedAlert(
-        event: EnhancedContractEvent,
+    private async createAnalysisAlert(
+        event: AnalyzedContractEvent,
         trader: ContractTrader
-    ): Promise<EnhancedWebhookAlert> {
-        this.stats.enhancedAlerts++;
+    ): Promise<TradingWebhookAlert> {
+        this.stats.advancedAlerts++;
         this.recordAnalysis(trader.address);
 
-        logger.info(`📊 生成带分析的增强告警`, {
+        logger.info(`📊 生成带分析的交易告警`, {
             trader: trader.label,
             asset: event.asset
         });
@@ -116,23 +111,39 @@ export class EnhancedAlertSystem {
             return await this.formatAnalysisAlert(event, trader, analysisReport);
         } else {
             logger.warn(`⚠️ 持仓分析失败，降级到基础告警`);
-            return this.createBasicEnhancedAlert(event, trader);
+            return this.createBasicAlert(event, trader);
         }
     }
 
     /**
-     * 创建基础增强告警
+     * 创建基础告警
      */
-    private createBasicEnhancedAlert(
-        event: EnhancedContractEvent,
+    private createBasicAlert(
+        event: AnalyzedContractEvent,
         trader: ContractTrader
-    ): EnhancedWebhookAlert {
+    ): TradingWebhookAlert {
         this.stats.basicAlerts++;
+
+        // 🔧 修复：为平仓事件计算并设置realizedPnL
+        if (event.eventType === 'position_close' && event.positionBefore) {
+            const pnl = this.calculateClosedPositionPnL(event);
+            if (pnl) {
+                event.realizedPnL = pnl.realized;
+                logger.info(`💰 计算平仓盈亏`, {
+                    trader: trader.label,
+                    asset: event.asset,
+                    realizedPnL: pnl.realized,
+                    percentage: pnl.percentage.toFixed(2) + '%',
+                    entryPrice: pnl.details?.entryPrice,
+                    exitPrice: pnl.details?.exitPrice
+                });
+            }
+        }
 
         // 生成更具体的操作描述
         const operationDescription = this.generateOperationDescription(event);
 
-        const alert: EnhancedWebhookAlert = {
+        const alert: TradingWebhookAlert = {
             timestamp: event.timestamp,
             alertType: this.mapEventTypeToAlertType(event.eventType),
             address: event.address,
@@ -145,10 +156,13 @@ export class EnhancedAlertSystem {
             blockTime: event.blockTime,
             notionalValue: event.metadata?.notionalValue,
 
-            // 增强字段
+            // 🔧 修复：传递realizedPnL到告警中
+            realizedPnL: event.realizedPnL,
+
+            // 分析字段
             classification: event.classification,
             positionChange: event.positionChange,
-            enhanced: false,
+            useAdvancedAnalysis: false,
             alertLevel: 'basic',
 
             // 添加操作描述到formattedMessage中
@@ -162,22 +176,36 @@ export class EnhancedAlertSystem {
      * 格式化带分析的告警
      */
     private async formatAnalysisAlert(
-        event: EnhancedContractEvent,
+        event: AnalyzedContractEvent,
         trader: ContractTrader,
         analysis: PositionAnalysisReport
-    ): Promise<EnhancedWebhookAlert> {
-        const formattedMessage = await this.formatEnhancedMessage(event, trader, analysis);
+    ): Promise<TradingWebhookAlert> {
+        // 🔧 修复：为平仓事件计算并设置realizedPnL
+        if (event.eventType === 'position_close' && event.positionBefore) {
+            const pnl = this.calculateClosedPositionPnL(event);
+            if (pnl) {
+                event.realizedPnL = pnl.realized;
+                logger.info(`💰 高级分析-计算平仓盈亏`, {
+                    trader: trader.label,
+                    asset: event.asset,
+                    realizedPnL: pnl.realized,
+                    percentage: pnl.percentage.toFixed(2) + '%'
+                });
+            }
+        }
 
-        logger.info('✅ 增强告警创建完成', {
+        const formattedMessage = await this.formatAdvancedMessage(event, trader, analysis);
+
+        logger.info('✅ 交易分析告警创建完成', {
             trader: trader.label,
-            enhanced: true,
+            useAdvancedAnalysis: true,
             hasFormattedMessage: !!formattedMessage,
             messageLength: formattedMessage?.length || 0,
             riskLevel: analysis.overallRisk.level,
             signalStars: analysis.strategicInsights.signalStars
         });
 
-        const alert: EnhancedWebhookAlert = {
+        const alert: TradingWebhookAlert = {
             timestamp: event.timestamp,
             alertType: this.mapEventTypeToAlertType(event.eventType),
             address: event.address,
@@ -190,11 +218,14 @@ export class EnhancedAlertSystem {
             blockTime: event.blockTime,
             notionalValue: event.metadata?.notionalValue,
 
-            // 增强字段
+            // 🔧 修复：传递realizedPnL到告警中
+            realizedPnL: event.realizedPnL,
+
+            // 分析字段
             classification: event.classification,
             positionChange: event.positionChange,
-            enhanced: true,
-            alertLevel: 'enhanced',
+            useAdvancedAnalysis: true,
+            alertLevel: 'advanced',
 
             // 分析数据
             positionAnalysis: {
@@ -213,10 +244,10 @@ export class EnhancedAlertSystem {
     }
 
     /**
-     * 格式化增强告警消息
+     * 格式化高级告警消息
      */
-    private async formatEnhancedMessage(
-        event: EnhancedContractEvent,
+    private async formatAdvancedMessage(
+        event: AnalyzedContractEvent,
         trader: ContractTrader,
         analysis: PositionAnalysisReport
     ): Promise<string> {
@@ -246,10 +277,10 @@ export class EnhancedAlertSystem {
             // 🔄 先记录当前交易
             const notionalValue = parseFloat(event.metadata?.notionalValue || '0');
             const alertType = event.eventType;
-            
+
             // 🔧 改进交易类型识别
             let tradeType: 'open' | 'close' | 'increase' | 'decrease' = 'open';
-            
+
             if (alertType === 'position_close') {
                 tradeType = 'close';
             } else if (alertType === 'position_decrease') {
@@ -299,15 +330,15 @@ export class EnhancedAlertSystem {
             // 📊 获取更新后的统计数据
             const stats = await this.traderStats.getTraderStats(trader.address);
             const formattedStats = this.traderStats.formatStatsForDisplay(stats);
-            
-            message += `\n📊 **交易员统计** (${formattedStats.monitoringDays} 监控)\n`;
+
+            message += `\n📊 **交易员统计** (${formattedStats.monitoringDays} 窗口)\n`;
             message += `🎯 **总交易**: ${formattedStats.totalTrades} | 🏆 **胜率**: ${formattedStats.winRate}\n`;
-            message += `💰 **累计盈亏**: ${formattedStats.totalRealizedPnL} | 📈 **交易量**: ${formattedStats.totalVolume}\n`;
+            message += `💰 **累计盈亏**: ${formattedStats.totalRealizedPnL}\n`;
             message += `🎮 **表现**: ${formattedStats.performance}\n`;
-            
+
             // 🔍 添加调试信息
             const debugStats = await this.traderStats.getTraderStats(trader.address);
-            message += `🔍 **调试**: 平仓${debugStats.totalClosedPositions}次, 盈利${debugStats.profitablePositions}次, 原始交易量${debugStats.totalVolume.toFixed(0)}\n`;
+            message += `🔍 **调试**: 平仓${debugStats.totalClosedPositions}次, 盈利${debugStats.profitablePositions}次, 7天窗口统计\n`;
         } catch (error) {
             logger.warn('📊 获取交易员统计失败:', error);
             message += `\n⚠️ **统计数据**: 暂时无法获取\n`;
@@ -317,13 +348,13 @@ export class EnhancedAlertSystem {
 
         // 📋 持仓变化分析
         message += `📋 **持仓变化分析**\n`;
-        
+
         // 🆕 格式化操作类型描述
-        let operationDescription = event.classification.description;
+        let operationDescription = event.classification?.description || '交易活动';
         if (event.positionChange && event.positionChange.sizeChange !== 0) {
             const sizeChange = event.positionChange.sizeChange;
             const changeText = formatChange(sizeChange);
-            
+
             // 替换描述中的数字部分
             if (operationDescription.includes('(') && operationDescription.includes(')')) {
                 operationDescription = operationDescription.replace(/\([^)]+\)/, `(${changeText})`);
@@ -333,7 +364,7 @@ export class EnhancedAlertSystem {
                 operationDescription += ` (${changeText})`;
             }
         }
-        
+
         message += `🔄 **操作类型**: ${operationDescription}\n`;
         message += `📈 **总持仓**: $${formatCurrency(analysis.userPosition.totalNotionalValue)}\n`;
 
@@ -371,7 +402,7 @@ export class EnhancedAlertSystem {
     private shouldPerformAnalysis(
         trader: ContractTrader,
         notionalValue: number,
-        event: EnhancedContractEvent
+        event: AnalyzedContractEvent
     ): boolean {
         if (!this.config.enablePositionAnalysis) return false;
 
@@ -491,8 +522,8 @@ export class EnhancedAlertSystem {
     getStats() {
         return {
             ...this.stats,
-            enhancedRate: this.stats.totalAlerts > 0
-                ? Math.round((this.stats.enhancedAlerts / this.stats.totalAlerts) * 100)
+            advancedRate: this.stats.totalAlerts > 0
+                ? Math.round((this.stats.advancedAlerts / this.stats.totalAlerts) * 100)
                 : 0,
             config: this.config
         };
@@ -501,7 +532,7 @@ export class EnhancedAlertSystem {
     /**
      * 生成操作描述
      */
-    private generateOperationDescription(event: EnhancedContractEvent): string {
+    private generateOperationDescription(event: AnalyzedContractEvent): string {
         if (event.classification && event.classification.description) {
             // 对于NO_CHANGE，提供更明确的描述
             if (event.classification.type === 'NO_CHANGE') {
@@ -534,7 +565,7 @@ export class EnhancedAlertSystem {
     /**
      * 计算平仓盈亏
      */
-    private calculateClosedPositionPnL(event: EnhancedContractEvent): {
+    private calculateClosedPositionPnL(event: AnalyzedContractEvent): {
         realized: number;
         percentage: number;
         details?: {
@@ -598,7 +629,7 @@ export class EnhancedAlertSystem {
      * 格式化基础消息
      */
     private formatBasicMessage(
-        event: EnhancedContractEvent,
+        event: AnalyzedContractEvent,
         trader: ContractTrader,
         operationDescription: string
     ): string {
@@ -671,8 +702,8 @@ export class EnhancedAlertSystem {
 }
 
 // 类型定义
-export interface EnhancedWebhookAlert extends ContractWebhookAlert {
-    // 增强字段
+export interface TradingWebhookAlert extends ContractWebhookAlert {
+    // 分析字段
     classification?: {
         type: string;
         description: string;
@@ -682,10 +713,13 @@ export interface EnhancedWebhookAlert extends ContractWebhookAlert {
         sizeChange: number;
         sideChanged: boolean;
     };
-    enhanced: boolean;
-    alertLevel: 'basic' | 'enhanced';
+    useAdvancedAnalysis: boolean;
+    alertLevel: 'basic' | 'advanced';
 
-    // 分析数据（仅增强告警）
+    // 🔧 添加realizedPnL字段
+    realizedPnL?: number;
+
+    // 分析数据（仅高级告警）
     positionAnalysis?: {
         riskLevel: string;
         riskScore: number;
@@ -698,14 +732,14 @@ export interface EnhancedWebhookAlert extends ContractWebhookAlert {
     formattedMessage?: string;
 }
 
-export interface EnhancedAlertConfig {
+export interface TradingAnalysisConfig {
     enablePositionAnalysis: boolean;
     analysisThreshold: number;
     maxDailyAnalysis: number;
-    detailLevel: 'basic' | 'detailed' | 'enhanced';
+    detailLevel: 'basic' | 'detailed' | 'advanced';
     includeRiskWarnings: boolean;
     includeStrategicInsights: boolean;
     customEmojis: boolean;
 }
 
-export default EnhancedAlertSystem;
+export default TradingAnalysisSystem;

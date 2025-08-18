@@ -92,8 +92,7 @@ async function debugEnhancedAlerts() {
             
             console.log('\n分类引擎:', {
                 总分类: stats.enhancedFeatures.classificationEngine.totalClassifications,
-                错误: stats.enhancedFeatures.classificationEngine.errors,
-                成功率: stats.enhancedFeatures.classificationEngine.successRate + '%'
+                错误: stats.enhancedFeatures.classificationEngine.errors
             });
             
             console.log('\n分析引擎:', {
@@ -104,10 +103,10 @@ async function debugEnhancedAlerts() {
             
             console.log('\n告警系统:', {
                 总告警: stats.enhancedFeatures.alertSystem.totalAlerts,
-                增强告警: stats.enhancedFeatures.alertSystem.enhancedAlerts,
+                高级告警: stats.enhancedFeatures.alertSystem.advancedAlerts,
                 基础告警: stats.enhancedFeatures.alertSystem.basicAlerts,
                 跳过分析: stats.enhancedFeatures.alertSystem.analysisSkipped,
-                增强率: stats.enhancedFeatures.alertSystem.enhancedRate + '%'
+                高级率: stats.enhancedFeatures.alertSystem.advancedRate + '%'
             });
         };
         

@@ -247,23 +247,23 @@ export class WebhookNotifier {
   }
 
   private async makeContractRequest(webhookUrl: string, alert: ContractWebhookAlert): Promise<void> {
-    // 🔍 检查是否有格式化消息（增强告警或基础告警都可能有）
-    const enhancedAlert = alert as any;
-    if (enhancedAlert.formattedMessage) {
-      const alertType = enhancedAlert.enhanced ? '增强告警' : '基础告警';
+    // 🔍 统一使用格式化消息（所有告警都应该有格式化消息）
+    const tradingAlert = alert as any;
+    if (tradingAlert.formattedMessage) {
+      const alertType = tradingAlert.useAdvancedAnalysis ? '交易分析' : '基础分析';
       logger.info(`📨 发送${alertType}消息`, {
         trader: alert.traderLabel,
         asset: alert.asset,
-        enhanced: enhancedAlert.enhanced || false,
-        messageLength: enhancedAlert.formattedMessage.length,
+        useAdvancedAnalysis: tradingAlert.useAdvancedAnalysis || false,
+        messageLength: tradingAlert.formattedMessage.length,
         hasFormattedMessage: true
       });
 
-      // 直接发送格式化消息
+      // 统一发送格式化消息
       const formattedPayload = {
-        text: enhancedAlert.formattedMessage,
-        username: enhancedAlert.enhanced ? 'Trading Analysis' : 'Trade Monitor',
-        icon_emoji: enhancedAlert.enhanced ? ':microscope:' : ':chart_with_upwards_trend:',
+        text: tradingAlert.formattedMessage,
+        username: 'Trading Analysis',  // 统一使用 Trading Analysis
+        icon_emoji: ':microscope:',    // 统一使用显微镜图标
         parseUrls: false
       };
 
@@ -275,216 +275,16 @@ export class WebhookNotifier {
       if (response.status >= 400) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-      return; // 使用格式化消息，直接返回
+      return;
     }
 
-    // 🔧 原有的基础告警格式化逻辑
-    logger.debug('📨 发送基础告警消息', {
+    // 🚨 如果没有格式化消息，说明系统有问题
+    logger.error('⚠️ 合约告警缺少格式化消息，这不应该发生', {
       trader: alert.traderLabel,
       asset: alert.asset,
-      enhanced: false
+      alertType: alert.alertType
     });
-
-    // 确定警报级别和类型 - 更新图标系统
-    let alertLevel = 'INFO';
-
-    // 根据动作类型选择专属图标和颜色 - 改进主题化设计
-    const getActionInfo = (alertType: string, side: string) => {
-      switch (alertType) {
-        case 'position_open_long':
-          return {
-            text: 'Long Position Opened',
-            emoji: '🚀', // 火箭表示做多开仓
-            username: 'Trading Signal 🐂',
-            icon_emoji: ':rocket:',
-            color: 0x00C851, // 更鲜艳的绿色
-            signal_type: 'LONG ENTRY'
-          };
-        case 'position_open_short':
-          return {
-            text: 'Short Position Opened',
-            emoji: '🔻', // 下降箭头表示做空开仓
-            username: 'Trading Signal 🐻',
-            icon_emoji: ':small_red_triangle_down:',
-            color: 0xFF4444, // 更鲜艳的红色
-            signal_type: 'SHORT ENTRY'
-          };
-        case 'position_close':
-          return {
-            text: 'Position Closed',
-            emoji: '🎯', // 靶心表示精准平仓
-            username: 'Exit Signal 🚪',
-            icon_emoji: ':dart:',
-            color: 0xFFBB33, // 橙黄色
-            signal_type: 'POSITION EXIT'
-          };
-        case 'position_increase':
-          return {
-            text: side === 'long' ? 'Long Position Increased' : 'Short Position Increased',
-            emoji: side === 'long' ? '📊' : '📉', // 根据方向选择图表
-            username: side === 'long' ? 'Scale-In Signal 🐂' : 'Scale-In Signal 🐻',
-            icon_emoji: side === 'long' ? ':chart_with_upwards_trend:' : ':chart_with_downwards_trend:',
-            color: side === 'long' ? 0x33B5E5 : 0xFF6B35,
-            signal_type: side === 'long' ? 'LONG SCALE-IN' : 'SHORT SCALE-IN'
-          };
-        case 'position_decrease':
-          return {
-            text: side === 'long' ? 'Long Position Decreased' : 'Short Position Decreased',
-            emoji: '⚖️', // 天平表示减仓调整
-            username: 'Scale-Out Signal ⚡',
-            icon_emoji: ':scales:',
-            color: 0x9C27B0, // 紫色
-            signal_type: side === 'long' ? 'LONG SCALE-OUT' : 'SHORT SCALE-OUT'
-          };
-        default:
-          return {
-            text: 'Position Updated',
-            emoji: '⚡',
-            username: 'Trading Bot 🤖',
-            icon_emoji: ':zap:',
-            color: 0xFF9800,
-            signal_type: 'POSITION UPDATE'
-          };
-      }
-    };
-
-    const actionInfo = getActionInfo(alert.alertType, alert.side);
-
-    // 根据名义价值调整警报级别
-    const notionalValue = parseFloat(alert.notionalValue || '0');
-    if (notionalValue >= 100000) {
-      alertLevel = 'HIGH';
-    } else if (notionalValue >= 10000) {
-      alertLevel = 'MEDIUM';
-    }
-
-    const sideEmoji = alert.side === 'long' ? '📈' : '📉';
-
-    // 简化交易员显示：合并标签和地址
-    const traderDisplay = `${alert.traderLabel || 'Unknown'} (${alert.address.slice(0, 6)}...${alert.address.slice(-4)})`;
-
-    // 检查是否为合并事件
-    const isMergedEvent = alert.mergedCount && alert.mergedCount > 1;
-
-    const mergedInfo = isMergedEvent ?
-      `Merged: ${alert.mergedCount} trades combined` : '';
-
-    // 🆕 格式化统计信息
-    const statsInfo = alert.traderStats ? [
-      `📊 **Trading Stats** (${alert.traderStats.monitoringDays} monitoring)`,
-      `🎯 **Total Trades**: ${alert.traderStats.totalTrades} | 🏆 **Win Rate**: ${alert.traderStats.winRate}`,
-      `💰 **Total P&L**: ${alert.traderStats.totalRealizedPnL} | 📈 **Volume**: ${alert.traderStats.totalVolume}`,
-      `🎮 **Performance**: ${alert.traderStats.performance}`
-    ].join('\n') : '';
-
-    // 🆕 开仓信息
-    const positionInfo = alert.positionInfo ? [
-      `💼 **Position Info**`,
-      `💵 **Total Notional**: ${alert.positionInfo.totalNotional}`,
-      `📍 **Entry Price**: $${alert.positionInfo.entryPrice}`
-    ].join('\n') : '';
-
-    // 🆕 平仓盈亏信息
-    const pnlInfo = (alert.realizedPnL !== undefined && alert.alertType === 'position_close') ? [
-      `💰 **Realized P&L**: ${alert.realizedPnL >= 0 ? '+' : ''}$${alert.realizedPnL.toFixed(2)} ${alert.realizedPnL >= 0 ? '🟢' : '🔴'}`
-    ].join('\n') : '';
-
-    // 修复交易哈希链接生成逻辑
-    const createTxLink = (txHash: string, address: string) => {
-      // 检查是否为真实交易哈希（64字符的有效十六进制且不是全零）
-      const isRealTx = txHash &&
-        txHash.startsWith('0x') &&
-        txHash.length === 66 &&
-        !/^0x0+$/.test(txHash) &&
-        !txHash.toLowerCase().includes('merged') &&
-        !txHash.toLowerCase().includes('hl_tid') &&
-        !txHash.toLowerCase().includes('hl_oid');
-
-      if (isRealTx) {
-        return `https://app.hyperliquid.xyz/explorer/tx/${txHash}`;
-      }
-      // 否则链接到用户交易页面
-      return `https://app.hyperliquid.xyz/trade/${address}`;
-    };
-
-    const txLink = createTxLink(alert.txHash, alert.address);
-
-    // 判断是否应该显示交易哈希链接（使用相同的逻辑）
-    const isRealTxHash = alert.txHash &&
-      alert.txHash.startsWith('0x') &&
-      alert.txHash.length === 66 &&
-      !/^0x0+$/.test(alert.txHash) &&
-      !alert.txHash.toLowerCase().includes('merged') &&
-      !alert.txHash.toLowerCase().includes('hl_tid') &&
-      !alert.txHash.toLowerCase().includes('hl_oid');
-
-    // 创建美化的消息格式 - 主题化设计
-    const messageLines = [
-      `${actionInfo.emoji} **${actionInfo.signal_type}**: ${actionInfo.text}${isMergedEvent ? ' (Merged)' : ''}`,
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-      `🎯 **Trader**: ${traderDisplay}`,
-      `💰 **Asset**: ${alert.asset} ${sideEmoji}`,
-      `📊 **Size**: ${formatTradeSize(alert.size)}${isMergedEvent ? ' (Combined)' : ''}`,
-      `💵 **Price**: $${alert.price ? formatPrice(alert.price) : 'N/A'}${isMergedEvent ? ' (Avg)' : ''}`,
-      `🏦 **Notional**: $${alert.notionalValue ? formatCurrency(alert.notionalValue) : 'N/A'}`,
-      `${alert.leverage ? `⚡ **Leverage**: ${alert.leverage}x` : ''}`,
-      `${mergedInfo ? `🔗 **${mergedInfo}**` : ''}`,
-      `⏰ **Time**: ${new Date(alert.blockTime * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`,
-      `🔍 **Tx**: ${txLink}`,
-      `${pnlInfo ? `\n${pnlInfo}` : ''}`,
-      `${positionInfo ? `\n${positionInfo}` : ''}`,
-      `${statsInfo ? `\n${statsInfo}` : ''}`,
-    ].filter(line => line !== '' && !line.includes('**:**')).join('\n');
-
-    // 使用Rocket.Chat特定的格式，禁用link preview
-    const contractPayload = {
-      text: messageLines,
-      username: actionInfo.username, // 动态用户名
-      icon_emoji: actionInfo.icon_emoji, // 使用Rocket.Chat格式的emoji
-      parseUrls: false, // Rocket.Chat特定：禁用URL解析和preview
-      attachments: [], // 确保没有附件触发preview
-      alert_info: {
-        alert_level: alertLevel,
-        trader_label: alert.traderLabel || 'Unknown',
-        action: actionInfo.text,
-        asset: alert.asset,
-        side: alert.side,
-        size: formatTradeSize(alert.size),
-        price: alert.price ? formatPrice(alert.price) : null,
-        notional_value: alert.notionalValue ? formatCurrency(alert.notionalValue) : null,
-        leverage: alert.leverage,
-        address: alert.address,
-        transaction_hash: alert.txHash,
-        explorer_url: txLink,
-        is_real_tx: isRealTxHash,
-        is_merged: isMergedEvent,
-        merged_count: alert.mergedCount || 1
-      },
-      raw_alert: alert,
-      metadata: {
-        system: 'hype-contract-monitor',
-        version: '1.4.0',
-        timestamp_iso: new Date(alert.timestamp).toISOString(),
-        action_type: actionInfo.text,
-        alert_level: alertLevel,
-        is_merged_event: isMergedEvent,
-        disable_preview: true,
-        platform: 'rocket_chat'
-      }
-    };
-
-    const response = await axios.post(webhookUrl, contractPayload, {
-      timeout: this.timeout,
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'HYPE-Contract-Monitor/1.4',
-      },
-    });
-
-    // 检查响应状态
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
+    throw new Error('合约告警必须包含格式化消息');
   }
 
   private getRetryDelay(attempt: number): number {

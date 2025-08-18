@@ -3,9 +3,9 @@ import { ContractTrader, ContractEvent, ContractWebhookAlert } from '../types';
 import logger from '../logger';
 import * as hl from '@nktkas/hyperliquid';
 import { PositionStateManager } from '../managers/PositionStateManager';
-import { TradeClassificationEngine, EnhancedContractEvent } from '../managers/TradeClassificationEngine';
+import { TradeClassificationEngine, AnalyzedContractEvent } from '../managers/TradeClassificationEngine';
 import { PositionAnalysisEngine } from '../managers/PositionAnalysisEngine';
-import { EnhancedAlertSystem } from '../managers/EnhancedAlertSystem';
+import { TradingAnalysisSystem } from '../managers/TradingAnalysisSystem';
 
 /**
  * 纯净RPC合约监控器 
@@ -20,11 +20,11 @@ export class PureRpcContractMonitor extends EventEmitter {
     private infoClient: hl.InfoClient;
     private pollingIntervals: NodeJS.Timeout[] = [];
 
-    // 增强功能组件
+    // 交易分析组件
     private positionManager: PositionStateManager;
     private classificationEngine: TradeClassificationEngine;
     private analysisEngine: PositionAnalysisEngine;
-    private alertSystem: EnhancedAlertSystem;
+    private alertSystem: TradingAnalysisSystem;
 
     // 轮询配置 - 优化API调用频率，避免429错误
     private readonly POLLING_INTERVAL = 120000; // 保持30秒轮询间隔
@@ -79,14 +79,14 @@ export class PureRpcContractMonitor extends EventEmitter {
         this.positionManager = new PositionStateManager(this.infoClient);
         this.classificationEngine = new TradeClassificationEngine(this.positionManager);
         this.analysisEngine = new PositionAnalysisEngine(this.positionManager);
-        this.alertSystem = new EnhancedAlertSystem(this.analysisEngine);
+        this.alertSystem = new TradingAnalysisSystem(this.analysisEngine);
 
         // 初始化时间：从系统启动时间开始，避免历史订单污染
         this.traders.forEach(trader => {
             this.lastProcessedTime.set(trader.address, this.systemStartTime);
         });
 
-        logger.info('🔄 初始化纯净RPC合约监控器 (增强版 v2.1)', {
+        logger.info('🔄 初始化纯净RPC合约监控器 (交易分析版 v2.2)', {
             activeTraders: this.traders.length,
             minNotionalValue,
             strategy: '官方API + 智能交易分类 + 持仓分析',
@@ -94,7 +94,7 @@ export class PureRpcContractMonitor extends EventEmitter {
             orderCompletionDelay: `${this.ORDER_COMPLETION_DELAY / 1000}s`,
             systemStartTime: new Date(this.systemStartTime).toISOString(),
             historicalFilterEnabled: true, // 启用历史订单过滤
-            enhancedFeatures: [
+            tradingAnalysisFeatures: [
                 '持仓状态管理',
                 '智能交易分类',
                 '多维度持仓分析',
@@ -183,11 +183,11 @@ export class PureRpcContractMonitor extends EventEmitter {
             // 启动健康监控
             this.startHealthMonitoring();
 
-            logger.info('✅ 纯净RPC合约监控器启动成功 (增强版)', {
+            logger.info('✅ 纯净RPC合约监控器启动成功 (交易分析版)', {
                 activeTraders: this.traders.length,
-                strategy: 'pure-official-api-polling + enhanced-classification',
+                strategy: 'pure-official-api-polling + trading-analysis',
                 pollingInterval: `${this.POLLING_INTERVAL / 1000}s`,
-                enhancedFeatures: 'enabled'
+                tradingAnalysisFeatures: 'enabled'
             });
 
         } catch (error) {
@@ -445,19 +445,19 @@ export class PureRpcContractMonitor extends EventEmitter {
                 time: new Date(fill.time).toISOString()
             });
 
-            // 检查是否启用增强分析
-            const useEnhancedAnalysis = true; // 默认启用增强分析
+            // 检查是否启用交易分析
+            const useTradingAnalysis = true; // 默认启用交易分析
 
-            if (useEnhancedAnalysis) {
-                // 使用增强分析系统，不发送基础事件以避免重复
-                logger.debug(`📊 [调试] 使用增强分析处理 ${trader.label} 的填充，跳过基础事件发送`, {
+            if (useTradingAnalysis) {
+                // 使用交易分析系统，不发送基础事件以避免重复
+                logger.debug(`📊 [调试] 使用交易分析处理 ${trader.label} 的填充，跳过基础事件发送`, {
                     trader: trader.label,
                     asset: coin,
                     size: size,
                     notional: `$${notionalValue.toFixed(2)}`,
-                    eventPath: '跳过基础事件，等待增强分析'
+                    eventPath: '跳过基础事件，等待交易分析'
                 });
-                return; // 让聚合订单处理逻辑来发送增强的事件
+                return; // 让聚合订单处理逻辑来发送分析的事件
             } else {
                 // 使用基础系统：直接发射事件，不聚合
                 logger.info(`📊 [调试] 使用基础系统发送事件`, {
@@ -644,39 +644,39 @@ export class PureRpcContractMonitor extends EventEmitter {
                 oid: aggregatedOrder.oid
             });
 
-            // 使用增强分类引擎处理交易
-            const enhancedEvent = await this.classificationEngine.classifyTrade(
+            // 使用交易分类引擎处理交易
+            const analyzedEvent = await this.classificationEngine.classifyTrade(
                 aggregatedOrder,
                 trader,
                 8000,  // 8秒初始延迟等待交易结算
                 2      // 最多重试2次
             );
 
-            if (enhancedEvent) {
+            if (analyzedEvent) {
                 logger.info(`🏷️ ${trader.label} 交易分类完成`, {
-                    asset: enhancedEvent.asset,
-                    type: enhancedEvent.classification.type,
-                    description: enhancedEvent.classification.description,
-                    confidence: enhancedEvent.classification.confidence,
-                    positionChange: enhancedEvent.positionChange
+                    asset: analyzedEvent.asset,
+                    type: analyzedEvent.classification?.type,
+                    description: analyzedEvent.classification?.description,
+                    confidence: analyzedEvent.classification?.confidence,
+                    positionChange: analyzedEvent.positionChange
                 });
 
-                // 创建增强告警
-                const enhancedAlert = await this.alertSystem.createEnhancedAlert(enhancedEvent, trader);
+                // 创建交易分析告警
+                const tradingAlert = await this.alertSystem.createTradingAlert(analyzedEvent, trader);
 
-                logger.info(`🚨 [调试] 即将发送增强告警`, {
+                logger.info(`🚨 [调试] 即将发送交易分析告警`, {
                     trader: trader.label,
-                    asset: enhancedEvent.asset,
-                    alertType: enhancedAlert.alertType,
-                    alertLevel: enhancedAlert.alertLevel,
-                    enhanced: enhancedAlert.enhanced,
-                    eventPath: '增强分析路径',
-                    riskLevel: enhancedAlert.positionAnalysis?.riskLevel,
-                    signalStrength: enhancedAlert.positionAnalysis?.signalStars
+                    asset: analyzedEvent.asset,
+                    alertType: tradingAlert.alertType,
+                    alertLevel: tradingAlert.alertLevel,
+                    useAdvancedAnalysis: tradingAlert.useAdvancedAnalysis,
+                    eventPath: '交易分析路径',
+                    riskLevel: tradingAlert.positionAnalysis?.riskLevel,
+                    signalStrength: tradingAlert.positionAnalysis?.signalStars
                 });
 
-                // 发射增强的告警事件 
-                this.emit('contractEvent', enhancedAlert, trader);
+                // 发射交易分析告警事件 
+                this.emit('contractEvent', tradingAlert, trader);
                 this.stats.totalEvents++;
             } else {
                 logger.warn(`⚠️ [调试] 交易分类失败，事件被跳过`, {
@@ -1142,9 +1142,9 @@ export class PureRpcContractMonitor extends EventEmitter {
                 analysisEngineEnabled: true,
                 alertSystemEnabled: true,
                 positionCacheSize: this.positionManager.getStats().cacheSize,
-                classificationSuccessRate: this.classificationEngine.getStats().successRate + '%',
+                classificationTotal: this.classificationEngine.getStats().totalClassifications,
                 totalAnalysis: this.analysisEngine.getStats().totalAnalysis,
-                enhancedAlertRate: this.alertSystem.getStats().enhancedRate + '%'
+                advancedAlertRate: this.alertSystem.getStats().advancedRate + '%'
             }
         };
     }
