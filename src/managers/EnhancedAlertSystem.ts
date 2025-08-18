@@ -1,6 +1,8 @@
 import { PositionAnalysisReport, PositionAnalysisEngine } from './PositionAnalysisEngine';
 import { EnhancedContractEvent } from './TradeClassificationEngine';
 import { ContractTrader, ContractWebhookAlert } from '../types';
+import { formatTradeSize, formatPrice, formatCurrency, formatChange } from '../utils/formatters';
+import TraderStatsService from '../services/TraderStatsService';
 import logger from '../logger';
 
 /**
@@ -9,6 +11,7 @@ import logger from '../logger';
  */
 export class EnhancedAlertSystem {
     private analysisEngine: PositionAnalysisEngine;
+    private traderStats: TraderStatsService;
 
     // 配置选项
     private config: EnhancedAlertConfig = {
@@ -34,6 +37,7 @@ export class EnhancedAlertSystem {
 
     constructor(analysisEngine: PositionAnalysisEngine, config?: Partial<EnhancedAlertConfig>) {
         this.analysisEngine = analysisEngine;
+        this.traderStats = new TraderStatsService();
         if (config) {
             this.config = { ...this.config, ...config };
         }
@@ -41,6 +45,14 @@ export class EnhancedAlertSystem {
         logger.info('🚨 增强告警系统初始化完成', {
             config: this.config
         });
+    }
+
+    /**
+     * 初始化TraderStats连接
+     */
+    async initialize(): Promise<void> {
+        await this.traderStats.connect();
+        logger.info('🎯 增强告警系统统计服务已连接');
     }
 
     /**
@@ -101,7 +113,7 @@ export class EnhancedAlertSystem {
         const analysisReport = await this.analysisEngine.analyzePosition(trader, event.asset);
 
         if (analysisReport) {
-            return this.formatAnalysisAlert(event, trader, analysisReport);
+            return await this.formatAnalysisAlert(event, trader, analysisReport);
         } else {
             logger.warn(`⚠️ 持仓分析失败，降级到基础告警`);
             return this.createBasicEnhancedAlert(event, trader);
@@ -138,7 +150,7 @@ export class EnhancedAlertSystem {
             positionChange: event.positionChange,
             enhanced: false,
             alertLevel: 'basic',
-            
+
             // 添加操作描述到formattedMessage中
             formattedMessage: this.formatBasicMessage(event, trader, operationDescription)
         };
@@ -149,12 +161,12 @@ export class EnhancedAlertSystem {
     /**
      * 格式化带分析的告警
      */
-    private formatAnalysisAlert(
+    private async formatAnalysisAlert(
         event: EnhancedContractEvent,
         trader: ContractTrader,
         analysis: PositionAnalysisReport
-    ): EnhancedWebhookAlert {
-        const formattedMessage = this.formatEnhancedMessage(event, trader, analysis);
+    ): Promise<EnhancedWebhookAlert> {
+        const formattedMessage = await this.formatEnhancedMessage(event, trader, analysis);
 
         logger.info('✅ 增强告警创建完成', {
             trader: trader.label,
@@ -203,16 +215,16 @@ export class EnhancedAlertSystem {
     /**
      * 格式化增强告警消息
      */
-    private formatEnhancedMessage(
+    private async formatEnhancedMessage(
         event: EnhancedContractEvent,
         trader: ContractTrader,
         analysis: PositionAnalysisReport
-    ): string {
+    ): Promise<string> {
         const asset = event.asset;
         const side = event.side;
-        const size = event.size;
-        const price = parseFloat(event.price);
-        const notional = parseFloat(event.metadata?.notionalValue || '0');
+        const size = formatTradeSize(event.size);
+        const price = formatPrice(parseFloat(event.price));
+        const notional = formatCurrency(parseFloat(event.metadata?.notionalValue || '0'));
 
         const sideEmoji = side === 'long' ? '📈' : '📉';
         const directionText = side === 'long' ? '多仓' : '空仓';
@@ -223,16 +235,107 @@ export class EnhancedAlertSystem {
 
         // 🎯 交易详情
         message += `🎯 **交易详情**\n`;
-        message += `👤 **交易员**: ${trader.label} (${trader.address.slice(0, 6)}...${trader.address.slice(-4)})\n`;
+        message += `👤 **交易员**: ${trader.label} (${trader.address})\n`;
         message += `💰 **资产**: ${asset} | ${sideEmoji} **方向**: ${directionText} | 📊 **规模**: ${size}\n`;
-        message += `💵 **价格**: $${price.toLocaleString()} | 🏦 **价值**: $${notional.toLocaleString()}\n`;
+        message += `💵 **价格**: $${price} | 🏦 **价值**: $${notional}\n`;
         message += `⏰ **时间**: ${new Date(event.timestamp).toISOString().replace('T', ' ').slice(0, 19)} UTC\n`;
-        message += `🔍 **交易哈希**: https://app.hyperliquid.xyz/explorer/tx/${event.hash}\n\n`;
+        message += `🔍 **交易哈希**: https://app.hyperliquid.xyz/explorer/tx/${event.hash}\n`;
+
+        // 🆕 直接获取交易员统计信息，并同时记录当前交易
+        try {
+            // 🔄 先记录当前交易
+            const notionalValue = parseFloat(event.metadata?.notionalValue || '0');
+            const alertType = event.eventType;
+            
+            // 🔧 改进交易类型识别
+            let tradeType: 'open' | 'close' | 'increase' | 'decrease' = 'open';
+            
+            if (alertType === 'position_close') {
+                tradeType = 'close';
+            } else if (alertType === 'position_decrease') {
+                tradeType = 'decrease';
+            } else if (alertType === 'position_increase') {
+                tradeType = 'increase';
+            } else if (alertType.includes('open')) {
+                tradeType = 'open';
+            } else {
+                // 基于持仓变化判断
+                if (event.positionChange) {
+                    const sizeChange = event.positionChange.sizeChange;
+                    if (sizeChange > 0) {
+                        tradeType = 'increase';
+                    } else if (sizeChange < 0) {
+                        tradeType = 'decrease';
+                    }
+                }
+            }
+
+            // 🔧 尝试获取盈亏数据（如果是平仓）
+            let realizedPnL: number | undefined;
+            if (tradeType === 'close') {
+                // 这里可以尝试从事件中获取盈亏数据
+                // 目前先设为undefined，让统计系统处理
+                realizedPnL = undefined;
+            }
+
+            logger.debug(`📊 准备记录交易`, {
+                trader: trader.address.slice(0, 8),
+                asset: event.asset,
+                alertType,
+                tradeType,
+                notionalValue: notionalValue.toFixed(2),
+                realizedPnL: realizedPnL || 'N/A'
+            });
+
+            // 记录交易
+            await this.traderStats.recordTrade(
+                trader.address,
+                event.asset,
+                notionalValue,
+                tradeType,
+                realizedPnL
+            );
+
+            // 📊 获取更新后的统计数据
+            const stats = await this.traderStats.getTraderStats(trader.address);
+            const formattedStats = this.traderStats.formatStatsForDisplay(stats);
+            
+            message += `\n📊 **交易员统计** (${formattedStats.monitoringDays} 监控)\n`;
+            message += `🎯 **总交易**: ${formattedStats.totalTrades} | 🏆 **胜率**: ${formattedStats.winRate}\n`;
+            message += `💰 **累计盈亏**: ${formattedStats.totalRealizedPnL} | 📈 **交易量**: ${formattedStats.totalVolume}\n`;
+            message += `🎮 **表现**: ${formattedStats.performance}\n`;
+            
+            // 🔍 添加调试信息
+            const debugStats = await this.traderStats.getTraderStats(trader.address);
+            message += `🔍 **调试**: 平仓${debugStats.totalClosedPositions}次, 盈利${debugStats.profitablePositions}次, 原始交易量${debugStats.totalVolume.toFixed(0)}\n`;
+        } catch (error) {
+            logger.warn('📊 获取交易员统计失败:', error);
+            message += `\n⚠️ **统计数据**: 暂时无法获取\n`;
+        }
+
+        message += `\n`;
 
         // 📋 持仓变化分析
         message += `📋 **持仓变化分析**\n`;
-        message += `🔄 **操作类型**: ${event.classification.description}\n`;
-        message += `📈 **总持仓**: $${analysis.userPosition.totalNotionalValue.toLocaleString()}\n`;
+        
+        // 🆕 格式化操作类型描述
+        let operationDescription = event.classification.description;
+        if (event.positionChange && event.positionChange.sizeChange !== 0) {
+            const sizeChange = event.positionChange.sizeChange;
+            const changeText = formatChange(sizeChange);
+            
+            // 替换描述中的数字部分
+            if (operationDescription.includes('(') && operationDescription.includes(')')) {
+                operationDescription = operationDescription.replace(/\([^)]+\)/, `(${changeText})`);
+            } else if (sizeChange > 0) {
+                operationDescription += ` (${changeText})`;
+            } else {
+                operationDescription += ` (${changeText})`;
+            }
+        }
+        
+        message += `🔄 **操作类型**: ${operationDescription}\n`;
+        message += `📈 **总持仓**: $${formatCurrency(analysis.userPosition.totalNotionalValue)}\n`;
 
         // 💼 资产配置分析
         if (analysis.assetAllocation.topAssets.length > 0) {
@@ -242,7 +345,7 @@ export class EnhancedAlertSystem {
             analysis.assetAllocation.topAssets.slice(0, 3).forEach(assetItem => {
                 const emoji = assetItem.side === 'long' ? '📈' : '📉';
                 const changeIndicator = assetItem.asset === event.asset ? ' 🔺' : '';
-                message += `• ${assetItem.asset}: ${(assetItem.percentage * 100).toFixed(1)}% ($${assetItem.notionalValue.toLocaleString()}) - ${assetItem.side}${changeIndicator}\n`;
+                message += `• ${assetItem.asset}: ${(assetItem.percentage * 100).toFixed(1)}% ($${formatCurrency(assetItem.notionalValue)}) - ${assetItem.side}${changeIndicator}\n`;
             });
 
             if (analysis.riskExposure.maxSingleAssetExposure > 0.66) {
@@ -280,13 +383,13 @@ export class EnhancedAlertSystem {
 
         // 对于大额交易，即使分类为NO_CHANGE也应该进行分析
         const isLargeTransaction = notionalValue >= 10000; // $10,000以上的大额交易
-        
+
         // 所有有意义的持仓变化都应该进行分析
-        const isMeaningfulOperation = event.eventType !== 'no_change' && 
-                                    event.eventType !== 'unknown' &&
-                                    (event.classification && 
-                                     event.classification.type !== 'UNKNOWN' &&
-                                     event.classification.type !== 'FALLBACK');
+        const isMeaningfulOperation = event.eventType !== 'no_change' &&
+            event.eventType !== 'unknown' &&
+            (event.classification &&
+                event.classification.type !== 'UNKNOWN' &&
+                event.classification.type !== 'FALLBACK');
 
         // 对于大额交易，即使是NO_CHANGE也值得分析
         const shouldAnalyzeAnyway = isLargeTransaction && event.classification?.type === 'NO_CHANGE';
@@ -427,7 +530,7 @@ export class EnhancedAlertSystem {
 
         return actionMap[event.eventType] || '持仓变化';
     }
-    
+
     /**
      * 计算平仓盈亏
      */
@@ -447,7 +550,7 @@ export class EnhancedAlertSystem {
 
             const beforePosition = event.positionBefore;
             const exitPrice = parseFloat(event.price);
-            
+
             if (!beforePosition || !exitPrice || beforePosition.size === 0) {
                 return null;
             }
@@ -456,13 +559,13 @@ export class EnhancedAlertSystem {
             const entryPrice = beforePosition.entryPrice || 0;
             const size = Math.abs(beforePosition.size);
             const side = beforePosition.side;
-            
+
             if (entryPrice === 0 || size === 0) {
                 return null;
             }
 
             let realizedPnL: number;
-            
+
             if (side === 'long') {
                 // 多头平仓：(卖出价 - 买入价) * 数量
                 realizedPnL = (exitPrice - entryPrice) * size;
@@ -501,7 +604,7 @@ export class EnhancedAlertSystem {
     ): string {
         const asset = event.asset;
         const side = event.side;
-        
+
         // 检查是否为平仓事件并计算盈亏
         let pnlInfo = '';
         if (event.eventType === 'position_close' && event.positionBefore) {
@@ -510,15 +613,15 @@ export class EnhancedAlertSystem {
                 const pnlEmoji = pnl.realized >= 0 ? '💰' : '📉';
                 const pnlSign = pnl.realized >= 0 ? '+' : '';
                 pnlInfo = `\n💰 **Realized P&L**: ${pnlSign}$${pnl.realized.toFixed(2)} (${pnlSign}${pnl.percentage.toFixed(2)}%) ${pnlEmoji}`;
-                
+
                 if (pnl.details) {
                     pnlInfo += `\n📊 **Entry**: $${pnl.details.entryPrice.toFixed(4)} | **Exit**: $${pnl.details.exitPrice.toFixed(4)}`;
                 }
             }
         }
-        const size = event.size;
-        const price = parseFloat(event.price);
-        const notional = parseFloat(event.metadata?.notionalValue || '0');
+        const size = formatTradeSize(event.size);
+        const price = formatPrice(parseFloat(event.price));
+        const notional = formatCurrency(parseFloat(event.metadata?.notionalValue || '0'));
 
         const sideEmoji = side === 'long' ? '📈' : '📉';
         const directionText = side === 'long' ? '多仓' : '空仓';
@@ -528,9 +631,9 @@ export class EnhancedAlertSystem {
 
         // 🎯 交易详情
         message += `🎯 **交易详情**\n`;
-        message += `👤 **交易员**: ${trader.label} (${trader.address.slice(0, 6)}...${trader.address.slice(-4)})\n`;
-        message += `💰 **资产**: ${asset} | ${sideEmoji} **方向**: ${directionText} | 📊 **规模**: ${size}\n`;
-        message += `💵 **价格**: $${price.toLocaleString()} | 🏦 **价值**: $${notional.toLocaleString()}\n`;
+        message += `👤 **交易员**: ${trader.label} (${trader.address})\n`;
+        message += `💰 **资产**: ${asset} | ${sideEmoji} **方向**: ${directionText} | 📊 **规模**: ${formatTradeSize(size)}\n`;
+        message += `💵 **价格**: $${price} | 🏦 **价值**: $${notional}\n`;
         message += `🔄 **操作**: ${operationDescription}\n`;
         message += `⏰ **时间**: ${new Date(event.timestamp).toISOString().replace('T', ' ').slice(0, 19)} UTC\n`;
         message += `🔍 **交易哈希**: https://app.hyperliquid.xyz/explorer/tx/${event.hash}\n`;
@@ -544,8 +647,7 @@ export class EnhancedAlertSystem {
         if (event.positionChange) {
             message += `\n📋 **持仓变化**\n`;
             if (event.positionChange.sizeChange !== 0) {
-                const changeSign = event.positionChange.sizeChange > 0 ? '+' : '';
-                message += `📊 **数量变化**: ${changeSign}${event.positionChange.sizeChange.toFixed(6)}\n`;
+                message += `📊 **数量变化**: ${formatChange(event.positionChange.sizeChange)}\n`;
             }
             if (event.positionChange.sideChanged) {
                 message += `🔄 **方向改变**: 是\n`;
@@ -557,7 +659,7 @@ export class EnhancedAlertSystem {
             const notional = parseFloat(event.metadata?.notionalValue || '0');
             message += `\n💡 **交易说明**\n`;
             if (notional >= 100000) {
-                message += `🔍 **分析**: 检测到$${(notional/1000).toFixed(0)}K大额交易，但持仓净变化为零\n`;
+                message += `🔍 **分析**: 检测到$${(notional / 1000).toFixed(0)}K大额交易，但持仓净变化为零\n`;
                 message += `📊 **可能原因**: 同时开平仓、部分平仓后加仓、或复杂交易组合\n`;
             } else {
                 message += `🔍 **分析**: 交易活动未导致持仓净变化\n`;

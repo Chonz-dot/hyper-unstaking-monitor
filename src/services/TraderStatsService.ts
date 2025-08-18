@@ -188,17 +188,28 @@ export class TraderStatsService {
       stats.totalVolume += Math.abs(notionalValue);
       stats.lastTradeTime = Date.now();
       
-      // 处理平仓统计
-      if (tradeType === 'close' && realizedPnL !== undefined) {
+      // 🔧 修复：处理平仓统计
+      if (tradeType === 'close') {
         stats.totalClosedPositions += 1;
-        stats.totalRealizedPnL += realizedPnL;
         
-        if (realizedPnL > 0) {
+        // 如果没有提供盈亏数据，先记录平仓次数，盈亏为0
+        const pnl = realizedPnL || 0;
+        stats.totalRealizedPnL += pnl;
+        
+        if (pnl > 0) {
           stats.profitablePositions += 1;
-          stats.largestWin = Math.max(stats.largestWin, realizedPnL);
-        } else if (realizedPnL < 0) {
-          stats.largestLoss = Math.min(stats.largestLoss, realizedPnL); // 负数，所以用Math.min
+          stats.largestWin = Math.max(stats.largestWin, pnl);
+        } else if (pnl < 0) {
+          stats.largestLoss = Math.min(stats.largestLoss, pnl); // 负数，所以用Math.min
         }
+        
+        logger.debug(`📊 记录平仓: ${asset}, PnL: ${pnl}, 总平仓: ${stats.totalClosedPositions}`);
+      }
+      
+      // 🔧 特殊处理：如果是持仓减仓到0，也算平仓
+      if (tradeType === 'decrease') {
+        // 这里可以添加逻辑检查是否完全平仓
+        // 暂时先按正常减仓处理
       }
       
       await this.saveTraderStats(traderAddress, stats);
@@ -206,9 +217,11 @@ export class TraderStatsService {
       logger.debug(`📊 记录${traderAddress}交易`, {
         asset,
         tradeType,
-        notionalValue,
-        realizedPnL,
+        notionalValue: notionalValue.toFixed(2),
+        realizedPnL: realizedPnL?.toFixed(2) || 'N/A',
         totalTrades: stats.totalTrades,
+        totalVolume: stats.totalVolume.toFixed(2),
+        totalClosedPositions: stats.totalClosedPositions,
         winRate: `${(stats.winRate * 100).toFixed(1)}%`
       });
       
@@ -305,7 +318,13 @@ export class TraderStatsService {
       }
     };
 
-    const performance = stats.totalRealizedPnL >= 0 ? '🟢 Profitable' : '🔴 Losing';
+    const performance = stats.totalClosedPositions === 0 
+      ? '📊 评估中' 
+      : stats.totalRealizedPnL > 0 
+        ? '🟢 Profitable' 
+        : stats.totalRealizedPnL < 0 
+          ? '🔴 Losing'
+          : '⚪ 盈亏平衡';
     
     return {
       totalTrades: stats.totalTrades.toString(),

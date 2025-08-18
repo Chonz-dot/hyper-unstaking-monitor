@@ -2,6 +2,7 @@ import axios from 'axios';
 import config from './config';
 import logger from './logger';
 import { WebhookAlert, ContractWebhookAlert } from './types';
+import { formatTradeSize, formatPrice, formatCurrency } from './utils/formatters';
 
 export class WebhookNotifier {
   private transferWebhookUrl: string;
@@ -101,11 +102,6 @@ export class WebhookNotifier {
   }
 
   private async makeTransferRequest(webhookUrl: string, alert: WebhookAlert): Promise<void> {
-    // 格式化金额显示
-    const formatAmount = (amount: string) => {
-      const num = parseFloat(amount);
-      return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-    };
 
     // 计算占解锁总量的百分比
     const calculatePercentage = (amount: string, total?: number) => {
@@ -192,14 +188,14 @@ export class WebhookNotifier {
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `🌐 **Network**: Hyperliquid`,
       `💰 **Token**: ${tokenDisplay} ${directionEmoji}`,
-      `📊 **Amount**: ${formatAmount(alert.amount)}${calculatePercentage(alert.amount, alert.unlockAmount)}`,
+      `📊 **Amount**: ${formatTradeSize(alert.amount)}${calculatePercentage(alert.amount, alert.unlockAmount)}`,
       `${currentUsdValue ? `💵 **USD Value**: ${currentUsdValue}` : ''}`,
       `🏠 **Address**: ${alert.address.slice(0, 6)}...${alert.address.slice(-4)} (${alert.addressLabel || 'Unknown'})`,
-      `${alert.unlockAmount ? `🔓 **Unlock Total**: ${formatAmount(alert.unlockAmount.toString())} HYPE` : ''}`,
+      `${alert.unlockAmount ? `🔓 **Unlock Total**: ${formatTradeSize(alert.unlockAmount.toString())} HYPE` : ''}`,
       `🔗 **${txLinkText}**: ${transferTxLink}`,
       `⚙️ **Operation**: ${operationText}`,
       `⏰ **Time**: ${new Date(alert.blockTime * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`,
-      `${alert.cumulativeToday ? `📈 **24h Cumulative**: ${formatAmount(alert.cumulativeToday)} ${asset}` : ''}`,
+      `${alert.cumulativeToday ? `📈 **24h Cumulative**: ${formatTradeSize(alert.cumulativeToday)} ${asset}` : ''}`,
       `${cumulativeUsdValue ? `💰 **Cumulative USD**: ${cumulativeUsdValue}` : ''}`,
     ].filter(line => line !== ''); // 过滤空行
 
@@ -213,14 +209,14 @@ export class WebhookNotifier {
       // 保留基本的元数据
       alert_info: {
         alert_level: alertLevel,
-        amount: formatAmount(alert.amount),
+        amount: formatTradeSize(alert.amount),
         network: 'Hyperliquid',
         address_label: alert.addressLabel || 'Unknown',
         address: alert.address,
         transaction_hash: alert.txHash,
-        unlock_amount: alert.unlockAmount ? formatAmount(alert.unlockAmount.toString()) : null,
+        unlock_amount: alert.unlockAmount ? formatTradeSize(alert.unlockAmount.toString()) : null,
         percentage: alert.unlockAmount ? ((parseFloat(alert.amount) / alert.unlockAmount) * 100).toFixed(4) + '%' : null,
-        cumulative_24h: alert.cumulativeToday ? formatAmount(alert.cumulativeToday) : null,
+        cumulative_24h: alert.cumulativeToday ? formatTradeSize(alert.cumulativeToday) : null,
         explorer_link: transferTxLink
       },
       // 原始数据
@@ -288,12 +284,6 @@ export class WebhookNotifier {
       asset: alert.asset,
       enhanced: false
     });
-
-    // 格式化金额显示
-    const formatAmount = (amount: string) => {
-      const num = parseFloat(amount);
-      return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
-    };
 
     // 确定警报级别和类型 - 更新图标系统
     let alertLevel = 'INFO';
@@ -434,9 +424,9 @@ export class WebhookNotifier {
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `🎯 **Trader**: ${traderDisplay}`,
       `💰 **Asset**: ${alert.asset} ${sideEmoji}`,
-      `📊 **Size**: ${formatAmount(alert.size)}${isMergedEvent ? ' (Combined)' : ''}`,
-      `💵 **Price**: $${alert.price ? formatAmount(alert.price) : 'N/A'}${isMergedEvent ? ' (Avg)' : ''}`,
-      `🏦 **Notional**: $${alert.notionalValue ? formatAmount(alert.notionalValue) : 'N/A'}`,
+      `📊 **Size**: ${formatTradeSize(alert.size)}${isMergedEvent ? ' (Combined)' : ''}`,
+      `💵 **Price**: $${alert.price ? formatPrice(alert.price) : 'N/A'}${isMergedEvent ? ' (Avg)' : ''}`,
+      `🏦 **Notional**: $${alert.notionalValue ? formatCurrency(alert.notionalValue) : 'N/A'}`,
       `${alert.leverage ? `⚡ **Leverage**: ${alert.leverage}x` : ''}`,
       `${mergedInfo ? `🔗 **${mergedInfo}**` : ''}`,
       `⏰ **Time**: ${new Date(alert.blockTime * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`,
@@ -459,9 +449,9 @@ export class WebhookNotifier {
         action: actionInfo.text,
         asset: alert.asset,
         side: alert.side,
-        size: formatAmount(alert.size),
-        price: alert.price ? formatAmount(alert.price) : null,
-        notional_value: alert.notionalValue ? formatAmount(alert.notionalValue) : null,
+        size: formatTradeSize(alert.size),
+        price: alert.price ? formatPrice(alert.price) : null,
+        notional_value: alert.notionalValue ? formatCurrency(alert.notionalValue) : null,
         leverage: alert.leverage,
         address: alert.address,
         transaction_hash: alert.txHash,

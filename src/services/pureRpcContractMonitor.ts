@@ -116,6 +116,9 @@ export class PureRpcContractMonitor extends EventEmitter {
         this.stats.lastSuccessfulPoll = Date.now();
 
         try {
+            // 🆕 初始化增强告警系统的统计服务
+            await this.alertSystem.initialize();
+
             // 测试API连接（添加重试机制）
             logger.info('🔧 测试官方Hyperliquid API连接...');
 

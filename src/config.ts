@@ -60,6 +60,7 @@ const CONTRACT_TRADERS: ContractTrader[] = [
   { address: '0xb8b9e3097c8b1dddf9c5ea9d48a7ebeaf09d67d2', label: '交易员3', description: 'hyperdash交易员', isActive: true },
   { address: '0xd5ff5491f6f3c80438e02c281726757baf4d1070', label: '交易员4', description: 'hyperdash交易员', isActive: true },
   { address: '0x044d0932b02f5045bc00e0a6818b7f98ef504681', label: '20倍交易员5', description: 'hyperdash交易员', isActive: true },
+  { address: '0xbb876071a63bc4d9bfcf46b012b4437ea7ff4281', label: '6.2M以太坊空单', description: 'hyperdash交易员', isActive: true },
   { address: '0x45090576dEBb996eeFe85C1269E8772F8B08025A', label: 'self trade', description: 'hyperdash交易员', isActive: true },
 ];
 
