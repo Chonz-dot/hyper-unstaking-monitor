@@ -31,12 +31,19 @@ export class PriceService {
    */
   async getTokenPrice(symbol: string): Promise<number | null> {
     try {
+      const upperSymbol = symbol.toUpperCase();
+      
+      // 🔧 修复：USDC 特殊处理
+      if (upperSymbol === 'USDC') {
+        return 1.0; // USDC 固定为 $1.00
+      }
+      
       // 检查缓存
-      const cached = this.priceCache.get(symbol.toUpperCase());
+      const cached = this.priceCache.get(upperSymbol);
       const now = Date.now();
       
       if (cached && (now - cached.timestamp) < this.CACHE_TTL) {
-        logger.debug(`💰 使用缓存价格`, { symbol, price: cached.price });
+        logger.debug(`💰 使用缓存价格`, { symbol: upperSymbol, price: cached.price });
         return cached.price;
       }
 
@@ -44,7 +51,7 @@ export class PriceService {
       await this.updateAllPrices();
       
       // 从更新后的缓存获取
-      const updated = this.priceCache.get(symbol.toUpperCase());
+      const updated = this.priceCache.get(upperSymbol);
       return updated ? updated.price : null;
 
     } catch (error) {
@@ -67,14 +74,22 @@ export class PriceService {
     try {
       logger.debug('💰 开始批量更新价格...');
       
+      // 🔧 修复：首先添加USDC固定价格
+      this.priceCache.set('USDC', {
+        symbol: 'USDC',
+        price: 1.0,
+        timestamp: now
+      });
+      
       const allMids = await this.infoClient.allMids();
       
       if (!allMids) {
-        logger.warn('💰 未获取到价格数据');
+        logger.warn('💰 未获取到价格数据，但USDC价格已设置');
+        this.lastUpdateTime = now;
         return;
       }
 
-      let updatedCount = 0;
+      let updatedCount = 1; // USDC 已添加
       
       // 更新缓存
       for (const [symbol, priceStr] of Object.entries(allMids)) {
@@ -99,6 +114,16 @@ export class PriceService {
 
     } catch (error) {
       logger.error('💰 批量更新价格失败:', error);
+      
+      // 🔧 即使API失败，也确保USDC价格可用
+      if (!this.priceCache.has('USDC')) {
+        this.priceCache.set('USDC', {
+          symbol: 'USDC',
+          price: 1.0,
+          timestamp: now
+        });
+        logger.info('💰 设置USDC默认价格: $1.00');
+      }
     }
   }
 

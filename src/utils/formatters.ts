@@ -4,7 +4,7 @@
  */
 
 /**
- * 格式化交易数量/规模 (最多4位小数，移除尾随零)
+ * 格式化交易数量/规模 (最多4位小数，移除尾随零，添加千分符)
  */
 export function formatTradeSize(amount: string | number): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
@@ -15,8 +15,11 @@ export function formatTradeSize(amount: string | number): string {
     return num.toFixed(8).replace(/\.?0+$/, ''); // 移除尾随零
   }
   
-  // 对于正常交易规模，最多4位小数，移除尾随零
-  return num.toFixed(4).replace(/\.?0+$/, '');
+  // 🔧 修复：对于正常交易规模，添加千分符
+  const formatted = num.toFixed(4).replace(/\.?0+$/, ''); // 移除尾随零
+  const parts = formatted.split('.');
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ','); // 添加千分符
+  return parts.join('.');
 }
 
 /**
