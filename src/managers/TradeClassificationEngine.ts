@@ -60,22 +60,32 @@ export class TradeClassificationEngine {
     async classifyTrade(
         fill: any,
         trader: ContractTrader,
-        delayMs: number = 5000,
+        delayMs: number = 8000,  // 🔧 增加到8秒
         maxRetries: number = 2
     ): Promise<AnalyzedContractEvent | null> {
         try {
             const asset = fill.coin;
             
+            logger.info(`🔍 [调试] 开始交易分类`, {
+                trader: trader.label,
+                asset,
+                fillSide: fill.side,
+                fillSize: fill.sz,
+                delayMs
+            });
+            
             // 🔧 获取交易前的持仓状态
             const beforePosition = await this.getAssetPosition(trader.address, asset);
             
+            logger.info(`🔍 [调试] 等待${delayMs}ms让交易结算...`);
             // 等待一段时间让交易结算
             await new Promise(resolve => setTimeout(resolve, delayMs));
             
-            // 🔧 获取交易后的持仓状态
+            // 🔧 获取交易后的持仓状态（清除缓存强制刷新）
+            this.clearUserPositionCache(trader.address);
             const afterPosition = await this.getAssetPosition(trader.address, asset);
             
-            logger.info(`🔍 [调试] 获取持仓状态对比`, {
+            logger.info(`🔍 [调试] 持仓状态对比完成`, {
                 trader: trader.label,
                 asset,
                 beforePosition: beforePosition ? {
@@ -87,7 +97,8 @@ export class TradeClassificationEngine {
                     size: afterPosition.size,
                     side: afterPosition.side,
                     entryPrice: afterPosition.entryPrice
-                } : null
+                } : null,
+                hasValidComparison: beforePosition !== null || afterPosition !== null
             });
             
             // 使用真实的持仓状态进行分类
@@ -102,7 +113,7 @@ export class TradeClassificationEngine {
             );
             
         } catch (error) {
-            logger.error(`交易分类失败:`, error);
+            logger.error(`🔍 [调试] 交易分类失败:`, error);
             // 降级到简单分类
             const fallbackClassification = this.getFallbackClassification(fill);
             return this.createAnalyzedEventFromFeatures(
@@ -120,13 +131,46 @@ export class TradeClassificationEngine {
      */
     private async getAssetPosition(userAddress: string, asset: string): Promise<AssetPosition | null> {
         try {
+            logger.info(`🔍 [调试] 开始获取持仓信息`, {
+                userAddress: userAddress.slice(0, 6) + '...' + userAddress.slice(-4),
+                asset
+            });
+
             const userPosition = await this.positionManager.getUserPosition(userAddress);
+            
+            logger.info(`🔍 [调试] 持仓管理器返回结果`, {
+                userAddress: userAddress.slice(0, 6) + '...' + userAddress.slice(-4),
+                hasUserPosition: !!userPosition,
+                hasPositions: !!(userPosition?.positions),
+                positionsCount: userPosition?.positions?.length || 0,
+                allAssets: userPosition?.positions?.map(p => p.asset) || []
+            });
+
             if (!userPosition || !userPosition.positions) {
+                logger.warn(`🔍 [调试] 用户持仓数据为空`, {
+                    userAddress: userAddress.slice(0, 6) + '...' + userAddress.slice(-4),
+                    asset,
+                    userPosition: !!userPosition,
+                    positions: !!userPosition?.positions
+                });
                 return null;
             }
 
             // 查找特定资产的持仓
             const assetPosition = userPosition.positions.find(pos => pos.asset === asset);
+            
+            logger.info(`🔍 [调试] 资产持仓查找结果`, {
+                userAddress: userAddress.slice(0, 6) + '...' + userAddress.slice(-4),
+                asset,
+                found: !!assetPosition,
+                assetPosition: assetPosition ? {
+                    asset: assetPosition.asset,
+                    size: assetPosition.size,
+                    side: assetPosition.side,
+                    entryPrice: assetPosition.entryPrice
+                } : null
+            });
+
             if (!assetPosition) {
                 return null;
             }
@@ -135,9 +179,70 @@ export class TradeClassificationEngine {
             return assetPosition;
 
         } catch (error) {
-            logger.error(`获取${asset}持仓失败:`, error);
+            logger.error(`🔍 [调试] 获取${asset}持仓失败:`, error);
             return null;
         }
+    }
+
+    /**
+     * 清除特定用户的持仓缓存 - 改进版
+     */
+    private clearUserPositionCache(userAddress: string): void {
+        try {
+            // 通过反射访问私有属性（临时解决方案）
+            const positionManager = this.positionManager as any;
+            if (positionManager.positionCache) {
+                const cacheKey = userAddress.toLowerCase();
+                const hadCache = positionManager.positionCache.has(cacheKey);
+                positionManager.positionCache.delete(cacheKey);
+                
+                logger.info(`🔍 [调试] 持仓缓存清除`, {
+                    userAddress: userAddress.slice(0, 6) + '...' + userAddress.slice(-4),
+                    hadCache,
+                    remainingCacheSize: positionManager.positionCache.size
+                });
+            } else {
+                logger.warn(`🔍 [调试] 无法访问持仓缓存`);
+            }
+        } catch (error) {
+            logger.error(`🔍 [调试] 清除缓存失败:`, error);
+        }
+    }
+
+    /**
+     * 验证持仓变化是否合理
+     */
+    private isPositionChangeValid(
+        beforePosition: AssetPosition | null,
+        afterPosition: AssetPosition | null,
+        fill: any
+    ): boolean {
+        // 如果没有前后持仓数据，无法验证
+        if (!beforePosition && !afterPosition) {
+            logger.warn(`⚠️ 无法验证持仓变化：缺少持仓数据`);
+            return false;
+        }
+
+        const fillSize = Math.abs(parseFloat(fill.sz || '0'));
+        const beforeSize = Math.abs(beforePosition?.size || 0);
+        const afterSize = Math.abs(afterPosition?.size || 0);
+        const sizeChange = Math.abs(afterSize - beforeSize);
+
+        // 持仓变化应该接近交易数量（允许5%的误差）
+        const tolerance = fillSize * 0.05;
+        const isValidChange = Math.abs(sizeChange - fillSize) <= tolerance;
+
+        logger.info(`🔍 [调试] 持仓变化验证`, {
+            fillSize,
+            beforeSize,
+            afterSize,
+            sizeChange,
+            tolerance,
+            isValidChange,
+            changeRatio: sizeChange / fillSize
+        });
+
+        return isValidChange;
     }
 
     /**
@@ -153,7 +258,7 @@ export class TradeClassificationEngine {
     }
 
     /**
-     * 基于交易特征的智能分类 - 修复持仓对比逻辑
+     * 基于交易特征的智能分类 - 修复持仓无变化问题
      */
     private classifyByTradeCharacteristics(
         fill: any,
@@ -167,6 +272,7 @@ export class TradeClassificationEngine {
         const afterSize = afterPosition?.size || 0;
         const beforeSide = beforePosition?.side;
         const afterSide = afterPosition?.side;
+        const fillSize = Math.abs(parseFloat(fill.sz || '0'));
         
         logger.info(`🔍 [调试] 交易分类分析`, {
             fillSide,
@@ -175,6 +281,54 @@ export class TradeClassificationEngine {
             after: { size: afterSize, side: afterSide }
         });
         
+        // 🔧 新增：如果持仓无变化，使用交易数据推断操作类型
+        if (Math.abs(beforeSize) === Math.abs(afterSize) && beforeSide === afterSide) {
+            logger.warn(`⚠️ 持仓数据无变化，基于交易数据推断操作类型`, {
+                fillSize,
+                fillSide,
+                beforeSize,
+                afterSize,
+                推断逻辑: '根据现有持仓和交易方向判断'
+            });
+            
+            // 如果已有持仓且方向相同 -> 加仓
+            if (Math.abs(beforeSize) > 0 && beforeSide === fillSide) {
+                return {
+                    eventType: 'position_increase',
+                    description: `${fillSide === 'long' ? '多仓' : '空仓'}加仓 (推断)`,
+                    confidence: 'medium'
+                };
+            }
+            
+            // 如果已有持仓且方向相反 -> 减仓或平仓
+            if (Math.abs(beforeSize) > 0 && beforeSide !== fillSide) {
+                // 判断是减仓还是平仓
+                if (fillSize >= Math.abs(beforeSize)) {
+                    return {
+                        eventType: 'position_close',
+                        description: '平仓 (推断)',
+                        confidence: 'medium'
+                    };
+                } else {
+                    return {
+                        eventType: 'position_decrease',
+                        description: `${beforeSide === 'long' ? '多仓' : '空仓'}减仓 (推断)`,
+                        confidence: 'medium'
+                    };
+                }
+            }
+            
+            // 如果没有持仓 -> 开仓
+            if (Math.abs(beforeSize) === 0) {
+                return {
+                    eventType: fillSide === 'long' ? 'position_open_long' : 'position_open_short',
+                    description: `${fillSide === 'long' ? '开多仓' : '开空仓'} (推断)`,
+                    confidence: 'medium'
+                };
+            }
+        }
+        
+        // 原有的精确分类逻辑
         // 情况1: 之前没有持仓，现在有持仓 -> 开仓
         if (Math.abs(beforeSize) === 0 && Math.abs(afterSize) > 0) {
             return {
@@ -223,8 +377,26 @@ export class TradeClassificationEngine {
         }
         
         // 默认情况：使用填充的方向作为开仓
-        logger.warn(`⚠️ 无法明确分类交易，使用默认逻辑`, {
-            beforeSize, afterSize, beforeSide, afterSide, fillSide
+        logger.error(`❌ 无法明确分类交易，使用默认逻辑`, {
+            beforeSize, 
+            afterSize, 
+            beforeSide, 
+            afterSide, 
+            fillSide,
+            fillSize: fill.sz,
+            trader: fill.user || 'unknown',
+            问题诊断: {
+                是否有前置持仓: beforePosition !== null,
+                是否有后置持仓: afterPosition !== null,
+                前置持仓大小: beforeSize,
+                后置持仓大小: afterSize,
+                持仓大小差异: Math.abs(afterSize - beforeSize),
+                可能的问题: [
+                    beforePosition === null && afterPosition === null ? '无法获取持仓数据' : null,
+                    beforeSize === afterSize ? '持仓无变化' : null,
+                    '可能需要增加延迟时间'
+                ].filter(Boolean)
+            }
         });
         
         return {
@@ -268,6 +440,47 @@ export class TradeClassificationEngine {
             realizedPnL = this.calculateRealizedPnL(beforePosition, afterPosition, price);
         }
 
+        // 🔧 修复：根据交易类型确定正确的方向
+        let correctSide: 'long' | 'short';
+        switch (classification.eventType) {
+            case 'position_open_long':
+            case 'position_open_short':
+                // 开仓：使用交易方向
+                correctSide = fillSide;
+                break;
+            case 'position_close':
+            case 'position_decrease':
+                // 平仓/减仓：使用原持仓方向，排除 'none'
+                correctSide = (beforePosition?.side && beforePosition.side !== 'none') 
+                    ? beforePosition.side as 'long' | 'short'
+                    : fillSide;
+                break;
+            case 'position_increase':
+                // 加仓：使用当前持仓方向，排除 'none'
+                correctSide = (afterPosition?.side && afterPosition.side !== 'none')
+                    ? afterPosition.side as 'long' | 'short'
+                    : fillSide;
+                break;
+            case 'position_reverse':
+                // 反手：使用新的持仓方向，排除 'none'
+                correctSide = (afterPosition?.side && afterPosition.side !== 'none')
+                    ? afterPosition.side as 'long' | 'short'
+                    : fillSide;
+                break;
+            default:
+                // 默认使用交易方向
+                correctSide = fillSide;
+        }
+
+        logger.info(`🔍 [调试] 方向判断修复`, {
+            eventType: classification.eventType,
+            fillSide,
+            beforeSide: beforePosition?.side,
+            afterSide: afterPosition?.side,
+            correctSide,
+            description: classification.description
+        });
+
         const event: AnalyzedContractEvent = {
             timestamp: Date.now(),
             address: trader.address,
@@ -275,7 +488,7 @@ export class TradeClassificationEngine {
             asset: fill.coin,
             size: fillSize.toString(),
             price: price.toString(),
-            side: fillSide,
+            side: correctSide, // 🔧 使用修复后的正确方向
             hash: fill.hash || fill.tid || `analyzed_${Date.now()}_${fill.coin}`,
             blockTime,
 
