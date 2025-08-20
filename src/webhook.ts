@@ -170,8 +170,26 @@ export class WebhookNotifier {
       alert.txHash === '0x0000000000000000000000000000000000000000000000000000000000000000';
 
     const txLinkText = isInternalOp ? 'Account Page' : 'Transaction';
-    const operationType = alert.metadata?.transferType || 'transfer';
-    const operationText = isInternalOp ? `${operationType} (Internal)` : 'Blockchain Transaction';
+    
+    // 🆕 优化操作类型显示 - 优先使用具体的transferType，然后是eventType
+    let operationType = alert.metadata?.transferType || 'transfer';
+    
+    // 将技术术语转换为用户友好的显示文本
+    const operationDisplayNames: Record<string, string> = {
+      'deposit': 'Deposit',
+      'withdraw': 'Withdraw', 
+      'cStakingTransfer': 'Staking Transfer',
+      'spotTransfer': 'Spot Transfer',
+      'internalTransfer': 'Internal Transfer',
+      'accountClassTransfer': 'Account Transfer',
+      'subAccountTransfer': 'Sub-Account Transfer',
+      'transfer_in': 'Transfer In',
+      'transfer_out': 'Transfer Out',
+      'transfer': 'Transfer'
+    };
+    
+    const displayName = operationDisplayNames[operationType] || operationType.charAt(0).toUpperCase() + operationType.slice(1);
+    const operationText = isInternalOp ? `${displayName} (Internal)` : displayName;
     
     // 🆕 处理代币信息和价格
     const asset = alert.metadata?.originalAsset || 'HYPE';

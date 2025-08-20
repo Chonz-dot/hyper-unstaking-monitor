@@ -463,7 +463,7 @@ export class RpcSpotMonitor extends EventEmitter {
                     transferType: update.delta?.type || 'unknown',
                     delta: update.delta,
                     originalHash: update.hash, // 保存原始哈希用于调试
-                    isInternalOperation: this.isInternalOperation(update.hash)
+                    isInternalOperation: this.isInternalOperation(update.hash, update.delta?.type)
                 }
             };
 
@@ -493,12 +493,27 @@ export class RpcSpotMonitor extends EventEmitter {
     /**
      * 判断是否是内部操作（如质押、内部转账等）
      */
-    private isInternalOperation(hash: string): boolean {
-        return !hash || 
+    private isInternalOperation(hash: string, transferType?: string): boolean {
+        // 检查哈希格式
+        const isInvalidHash = !hash || 
                hash === '0x0000000000000000000000000000000000000000000000000000000000000000' || 
                hash === '0x' ||
                hash.startsWith('internal_') ||
                hash.startsWith('ledger_');
+        
+        // 检查操作类型 - 这些操作通常是内部账本操作，而不是真正的链上交易
+        const internalOperationTypes = [
+            'deposit',           // 存款 - 从外部到内部账户
+            'withdraw',          // 提款 - 从内部到外部账户
+            'cStakingTransfer',  // 质押转账 - 内部质押操作
+            'internalTransfer',  // 内部转账
+            'accountClassTransfer', // 账户类别转账
+            'subAccountTransfer'    // 子账户转账
+        ];
+        
+        const isInternalByType = transferType && internalOperationTypes.includes(transferType);
+        
+        return isInvalidHash || !!isInternalByType;
     }
 
     /**
