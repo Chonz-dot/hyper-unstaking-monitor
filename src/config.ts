@@ -51,6 +51,7 @@ const WATCHED_ADDRESSES: WatchedAddress[] = [
   { address: '0x62bc1fe6009388219dd84f9dca37930f6fb6fa22', label: 'Galaxy Digital机构2(大户监控)', unlockAmount: 0, isActive: true },
   { address: '0xcfdb74a8c080bb7b4360ed6fe21f895c653efff4', label: 'Amber Group机构(大户监控)', unlockAmount: 0, isActive: true }, // 150万HYPE
   { address: '0x77c3ea550d2da44b120e55071f57a108f8dd5e45', label: 'HYPE 股票第二大持有者（3.8 亿美元）(大户监控)', unlockAmount: 0, isActive: true }, // 150万HYPE
+  { address: '0x08e58e8a4744e06155e7e61151763a69b578f72a', label: 'WHO HOLDS 4.515M', unlockAmount: 0, isActive: true }, // 150万HYPE
 ];
 
 // 合约交易员监控列表
