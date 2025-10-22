@@ -63,6 +63,12 @@ const CONTRACT_TRADERS: ContractTrader[] = [
   { address: '0x044d0932b02f5045bc00e0a6818b7f98ef504681', label: '20倍交易员5', description: 'hyperdash交易员', isActive: true },
   { address: '0xbb876071a63bc4d9bfcf46b012b4437ea7ff4281', label: 'Andrew Kang--kol', description: 'kol', isActive: true },
   { address: '0xc32235231d29831a2cb2a11e3f9c7f38160fc1dd', label: 'Arthur Hayes--kol', description: 'kol', isActive: true },
+  {
+    address: '0xc32235231d29831a2cb2a11e3f9c7f38160fc1dd',
+    label: 'Fed Meeting Prophet🔮',
+    description: '美联储会议预言家-100%胜率内幕消息',
+    isActive: true
+  }
 ];
 
 export const config: Config = {
