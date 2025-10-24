@@ -68,6 +68,12 @@ const CONTRACT_TRADERS: ContractTrader[] = [
     label: 'Fed Meeting Prophet🔮',
     description: '美联储会议预言家-100%胜率内幕消息',
     isActive: true
+  },
+  {
+    address: '0xc2a30212a8ddac9e123944d6e29faddce994e5f2',
+    label: 'kol',
+    description: '140M btc 做空鲸鱼100% 胜率',
+    isActive: true
   }
 ];
 
