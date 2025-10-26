@@ -65,14 +65,14 @@ const CONTRACT_TRADERS: ContractTrader[] = [
   { address: '0xc32235231d29831a2cb2a11e3f9c7f38160fc1dd', label: 'Arthur Hayes--kol', description: 'kol', isActive: true },
   {
     address: '0xc32235231d29831a2cb2a11e3f9c7f38160fc1dd',
-    label: 'Fed Meeting Prophet🔮',
-    description: '美联储会议预言家-100%胜率内幕消息',
+    label: '美联储会议预言家-100%胜率内幕消息🔮',
+    description: 'kol',
     isActive: true
   },
   {
     address: '0xc2a30212a8ddac9e123944d6e29faddce994e5f2',
-    label: 'kol',
-    description: '140M btc 做空鲸鱼100% 胜率',
+    label: '140M btc 做空鲸鱼100% 胜率',
+    description: 'kol',
     isActive: true
   }
 ];
