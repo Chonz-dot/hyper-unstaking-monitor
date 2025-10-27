@@ -43,7 +43,6 @@ const WATCHED_ADDRESSES: WatchedAddress[] = [
   { address: '0xba60e7e6c222a6eca70abb6bb011c40fdaaa565b', label: 'ellie_nfts地址2(大户监控)', unlockAmount: 0, isActive: true },
   { address: '0x9a4a2224eb1ce642a497738e6e1227a0411f3679', label: 'ellie_nfts地址3(大户监控)', unlockAmount: 0, isActive: true },
   { address: '0xfdc5a81605d8b926947d2e865f74025dd53ac314', label: '神秘巨鲸集群1(大户监控)', unlockAmount: 0, isActive: true }, // 集群共230万HYPE
-  { address: '0x5d83bb3313240cab65e2e9200d3aaf3520474fb6', label: '神秘巨鲸集群2(大户监控)', unlockAmount: 0, isActive: true },
   { address: '0x316fc62528c317e569fe5aa4df6c1af0c4f2e678', label: '神秘巨鲸集群3(大户监控)', unlockAmount: 0, isActive: true },
   { address: '0x5b5d51203a0f9079f8aeb098a6523a13f298c060', label: 'Abraxas Capital机构1(大户监控)', unlockAmount: 0, isActive: true }, // 共229万
   { address: '0xb83de012dba672c76a7dbbbf3e459cb59d7d6e36', label: 'Abraxas Capital机构2(大户监控)', unlockAmount: 0, isActive: true },
@@ -62,10 +61,9 @@ const CONTRACT_TRADERS: ContractTrader[] = [
   { address: '0xd5ff5491f6f3c80438e02c281726757baf4d1070', label: '交易员4', description: 'hyperdash交易员', isActive: true },
   { address: '0x044d0932b02f5045bc00e0a6818b7f98ef504681', label: '20倍交易员5', description: 'hyperdash交易员', isActive: true },
   { address: '0xbb876071a63bc4d9bfcf46b012b4437ea7ff4281', label: 'Andrew Kang--kol', description: 'kol', isActive: true },
-  { address: '0xc32235231d29831a2cb2a11e3f9c7f38160fc1dd', label: 'Arthur Hayes--kol', description: 'kol', isActive: true },
   {
     address: '0xc32235231d29831a2cb2a11e3f9c7f38160fc1dd',
-    label: '美联储会议预言家-100%胜率内幕消息🔮',
+    label: 'Arthur Hayes (美联储预言家)',
     description: 'kol',
     isActive: true
   },
