@@ -142,6 +142,24 @@ export class RpcSpotMonitor extends EventEmitter {
 
                 // 🔧 对于网络错误，更宽松的处理策略
                 if (isNetworkError) {
+                    // 🚨 断路器：网络错误连续超过10次，暂停5分钟
+                    if (this.stats.consecutiveErrors >= 10) {
+                        const pauseDuration = 5 * 60 * 1000; // 5分钟
+                        logger.warn(`🚫 ${address.label} 断路器触发（现货监控网络错误）`, {
+                            consecutiveErrors: this.stats.consecutiveErrors,
+                            pauseDuration: `${pauseDuration / 1000}s`,
+                            nextRetry: new Date(Date.now() + pauseDuration).toISOString()
+                        });
+                        
+                        setTimeout(() => {
+                            this.stats.consecutiveErrors = 0; // 重置计数器
+                            if (this.isRunning) {
+                                this.startAddressPolling(address);
+                            }
+                        }, pauseDuration);
+                        return; // 停止当前轮询
+                    }
+                    
                     // 网络错误：记录但继续运行，不增加长延迟
                     if (this.stats.consecutiveErrors > 15) {
                         logger.warn(`${address.label}连续网络错误过多，但继续尝试`, {
@@ -517,17 +535,18 @@ export class RpcSpotMonitor extends EventEmitter {
     }
 
     /**
-     * 清理缓存
+     * 清理缓存（改进：从20%提升到40%）
      */
     private cleanupCache(): void {
         if (this.processedTransfers.size > this.MAX_CACHE_SIZE) {
             const entries = Array.from(this.processedTransfers);
-            const toRemove = entries.slice(0, this.MAX_CACHE_SIZE * 0.2); // 移除20%
+            const toRemove = entries.slice(0, this.MAX_CACHE_SIZE * 0.4); // 40%
             toRemove.forEach(entry => this.processedTransfers.delete(entry));
 
-            logger.debug(`🧹 清理转账缓存`, {
+            logger.info(`🧹 清理转账缓存`, {
                 removed: toRemove.length,
-                remaining: this.processedTransfers.size
+                remaining: this.processedTransfers.size,
+                cleanupRate: '40%'
             });
         }
     }

@@ -257,6 +257,24 @@ export class PureRpcContractMonitor extends EventEmitter {
 
                     // 🔧 对于网络错误，更宽松的处理策略
                     if (isNetworkError) {
+                        // 🚨 断路器：网络错误连续超过10次，暂停5分钟
+                        if (this.stats.consecutiveErrors >= 10) {
+                            const pauseDuration = 5 * 60 * 1000; // 5分钟
+                            logger.warn(`🚫 ${trader.label} 断路器触发（网络错误）`, {
+                                consecutiveErrors: this.stats.consecutiveErrors,
+                                pauseDuration: `${pauseDuration / 1000}s`,
+                                nextRetry: new Date(Date.now() + pauseDuration).toISOString()
+                            });
+                            
+                            setTimeout(() => {
+                                this.stats.consecutiveErrors = 0; // 重置计数器
+                                if (this.isRunning) {
+                                    this.startTraderPolling(trader);
+                                }
+                            }, pauseDuration);
+                            return; // 停止当前轮询
+                        }
+                        
                         // 网络错误：记录但继续运行，不增加长延迟
                         if (this.stats.consecutiveErrors > 20) {
                             logger.warn(`${trader.label}连续网络错误过多，但继续尝试`, {
@@ -549,13 +567,14 @@ export class PureRpcContractMonitor extends EventEmitter {
             // 标记为已处理
             this.processedFills.add(fillId);
 
-            // 清理缓存，避免内存泄漏
+            // 清理缓存，避免内存泄漏（改进：从10%提升到40%）
             if (this.processedFills.size > this.MAX_CACHE_SIZE) {
-                const oldEntries = Array.from(this.processedFills).slice(0, 1000);
+                const oldEntries = Array.from(this.processedFills).slice(0, 4000); // 40%
                 oldEntries.forEach(entry => this.processedFills.delete(entry));
-                logger.debug(`🧹 ${trader.label} 清理去重缓存`, {
+                logger.info(`🧹 ${trader.label} 清理去重缓存`, {
                     removed: oldEntries.length,
-                    remaining: this.processedFills.size
+                    remaining: this.processedFills.size,
+                    cleanupRate: '40%'
                 });
             }
 
@@ -615,7 +634,34 @@ export class PureRpcContractMonitor extends EventEmitter {
             }
         }
 
+        // 定期清理订单追踪缓存，防止内存泄漏
+        this.cleanupTrackedOrders();
+
         return aggregatedOrders;
+    }
+
+    /**
+     * 清理订单追踪缓存，防止内存泄漏
+     */
+    private cleanupTrackedOrders(): void {
+        const TRACKED_ORDERS_LIMIT = 5000;
+        const CLEANUP_COUNT = 2000; // 40%
+
+        if (this.trackedOrders.size > TRACKED_ORDERS_LIMIT) {
+            const ordersToRemove = Array.from(this.trackedOrders).slice(0, CLEANUP_COUNT);
+            
+            ordersToRemove.forEach(oid => {
+                this.trackedOrders.delete(oid);
+                this.orderCompletionCache.delete(oid); // 同时清理对应的订单缓存
+            });
+
+            logger.info('🧹 清理订单追踪缓存', {
+                removed: ordersToRemove.length,
+                remainingOrders: this.trackedOrders.size,
+                remainingCache: this.orderCompletionCache.size,
+                cleanupRate: '40%'
+            });
+        }
     }
 
     /**
