@@ -267,7 +267,8 @@ class TraderMonitor {
       event.traderStats = formattedStats;
 
       // 统一发送交易分析告警（已经是格式化的告警对象）
-      await this.notifier.sendContractAlert(event);
+      // 优先使用交易员的自定义webhook，否则使用全局配置
+      await this.notifier.sendContractAlert(event, trader.webhook);
       
       // 🔍 调试日志：确认发送
       logger.info('✅ [调试] 合约事件已发送到webhook', {
@@ -275,7 +276,8 @@ class TraderMonitor {
         alertType: event.alertType || event.eventType,
         useAdvancedAnalysis: event.useAdvancedAnalysis || false,
         totalTrades: formattedStats.totalTrades,
-        winRate: formattedStats.winRate
+        winRate: formattedStats.winRate,
+        usingCustomWebhook: !!trader.webhook
       });
 
     } catch (error) {

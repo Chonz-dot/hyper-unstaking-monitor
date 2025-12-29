@@ -34,9 +34,13 @@ export class WebhookNotifier {
     await this.sendWebhook(this.transferWebhookUrl, alert, 'transfer');
   }
 
-  async sendContractAlert(alert: ContractWebhookAlert): Promise<void> {
-    if (!this.contractWebhookUrl) {
-      logger.warn('合约Webhook URL未配置，跳过合约警报发送');
+  async sendContractAlert(alert: ContractWebhookAlert, customWebhookUrl?: string): Promise<void> {
+    // 优先使用自定义webhook，否则使用全局配置
+    const webhookUrl = customWebhookUrl || this.contractWebhookUrl;
+    
+    if (!webhookUrl) {
+      const traderLabel = alert.traderLabel || 'unknown';
+      logger.warn(`合约Webhook URL未配置（trader: ${traderLabel}），跳过合约警报发送`);
       return;
     }
 
@@ -47,10 +51,12 @@ export class WebhookNotifier {
       asset: alert.asset,
       enhanced: (alert as any).enhanced || false,
       hasFormattedMessage: !!(alert as any).formattedMessage,
-      webhookType: (alert as any).enhanced ? 'Trading Analysis' : 'Trade Monitor'
+      webhookType: (alert as any).enhanced ? 'Trading Analysis' : 'Trade Monitor',
+      usingCustomWebhook: !!customWebhookUrl,
+      webhookUrl: webhookUrl.substring(0, 30) + '...' // 只显示前30个字符
     });
 
-    await this.sendWebhook(this.contractWebhookUrl, alert, 'contract');
+    await this.sendWebhook(webhookUrl, alert, 'contract');
   }
 
   private async sendWebhook(webhookUrl: string, alert: WebhookAlert | ContractWebhookAlert, type: 'transfer' | 'contract'): Promise<void> {

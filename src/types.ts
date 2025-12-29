@@ -16,6 +16,7 @@ export interface ContractTrader {
   address: string;         // 交易员地址
   label: string;          // 交易员标签
   description?: string;   // 描述
+  webhook?: string;       // 自定义webhook URL（可选，未配置则使用全局webhook）
   isActive: boolean;      // 是否启用监控
 }
 

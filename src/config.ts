@@ -72,6 +72,13 @@ const CONTRACT_TRADERS: ContractTrader[] = [
     label: '140M btc 做空鲸鱼100% 胜率',
     description: 'kol',
     isActive: true
+  },
+  {
+    address: '0x6b26f66f460fd173b009d0c7a478ca400470e03f',
+    label: 'ZEC多头TOP1-494万浮盈巨鲸',
+    description: 'Hyperliquid ZEC最大多头持仓者，48K ZEC @$409.87',
+    webhook: process.env.ZEC_WHALE_WEBHOOK,
+    isActive: true
   }
 ];
 
