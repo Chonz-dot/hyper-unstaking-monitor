@@ -18,6 +18,9 @@ RUN npm install --only=production && npm cache clean --force
 # 复制构建好的dist目录
 COPY dist/ ./dist/
 
+# 复制健康检查脚本
+COPY healthcheck.js ./
+
 # 创建logs目录（因为.dockerignore排除了logs/）
 RUN mkdir -p logs
 
@@ -32,9 +35,9 @@ USER hype-monitor
 # 暴露端口（如果需要）
 EXPOSE 3000
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD node -e "process.exit(0)" || exit 1
+# 健康检查 - 验证应用实际运行状态
+HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
+    CMD node healthcheck.js || exit 1
 
 # 使用dumb-init作为PID 1
 ENTRYPOINT ["dumb-init", "--"]

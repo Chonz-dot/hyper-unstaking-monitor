@@ -65,20 +65,20 @@ services:
       - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "process.exit(0)"]
+      test: ["CMD", "node", "healthcheck.js"]
       interval: 30s
       timeout: 10s
-      start_period: 30s
+      start_period: 60s
       retries: 3
     networks:
       - hype-monitor-network
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 768M
           cpus: '0.5'
         reservations:
-          memory: 256M
+          memory: 384M
           cpus: '0.25'
 
   # 开发服务（可选）

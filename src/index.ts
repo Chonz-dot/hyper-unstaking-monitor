@@ -13,6 +13,8 @@ import WebhookNotifier from './webhook';
 import logger from './logger';
 import config from './config';
 import { ContractEvent, ContractTrader, MonitorEvent } from './types';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // 全局系统启动时间
 export const SYSTEM_START_TIME = Date.now();
@@ -386,6 +388,11 @@ class TraderMonitor {
   }
 
   private startStatusUpdater(): void {
+    const healthFile = path.join(process.cwd(), 'logs', '.healthcheck');
+
+    // 立即写入一次健康检查文件
+    this.writeHealthCheck(healthFile);
+
     // 每30秒更新一次状态
     const interval = setInterval(async () => {
       if (!this.isRunning) {
@@ -394,6 +401,9 @@ class TraderMonitor {
       }
 
       try {
+        // 写入健康检查文件（Docker healthcheck 用）
+        this.writeHealthCheck(healthFile);
+
         await this.cache.updateMonitoringStatus({
           startTime: this.startTime,
           lastUpdate: Date.now(),
@@ -402,6 +412,18 @@ class TraderMonitor {
         logger.error('更新状态失败:', error);
       }
     }, 30000);
+  }
+
+  private writeHealthCheck(filePath: string): void {
+    try {
+      fs.writeFileSync(filePath, JSON.stringify({
+        timestamp: Date.now(),
+        isRunning: this.isRunning,
+        uptime: Date.now() - this.startTime,
+      }));
+    } catch (error) {
+      logger.warn('写入健康检查文件失败:', error);
+    }
   }
 
   // 获取系统状态
@@ -425,32 +447,34 @@ class TraderMonitor {
   }
 
   // 优雅关闭
-  async gracefulShutdown(): Promise<void> {
-    logger.info('接收到关闭信号，开始优雅关闭...');
+  async gracefulShutdown(exitCode = 1): Promise<void> {
+    logger.info('接收到关闭信号，开始优雅关闭...', { exitCode });
 
     await this.stop();
 
     logger.info('优雅关闭完成');
-    process.exit(0);
+    process.exit(exitCode);
   }
 }
 
 // 创建监控实例
 const monitor = new TraderMonitor();
 
-// 处理进程信号
-process.on('SIGINT', () => monitor.gracefulShutdown());
-process.on('SIGTERM', () => monitor.gracefulShutdown());
+// 处理进程信号 - SIGINT/SIGTERM 使用退出码 0（用户主动停止）
+process.on('SIGINT', () => monitor.gracefulShutdown(0));
+process.on('SIGTERM', () => monitor.gracefulShutdown(0));
 
-// 处理未捕获的异常
+// 处理未捕获的异常 - 必须退出，Node.js官方文档明确进程状态不可靠
 process.on('uncaughtException', (error) => {
-  logger.error('未捕获的异常:', error);
-  monitor.gracefulShutdown();
+  logger.error('未捕获的异常，进程即将退出:', error);
+  monitor.gracefulShutdown(1);
 });
 
+// 处理未处理的Promise拒绝 - 只记录日志，不杀进程
+// 网络波动、Redis瞬断、API超时等都可能产生unhandled rejection
+// 这些都是可恢复的，不应该导致整个服务退出
 process.on('unhandledRejection', (reason) => {
-  logger.error('未处理的Promise拒绝:', reason);
-  monitor.gracefulShutdown();
+  logger.error('未处理的Promise拒绝（已捕获，服务继续运行）:', reason);
 });
 
 // 启动监控
