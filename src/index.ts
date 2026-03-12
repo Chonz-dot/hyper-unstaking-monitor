@@ -388,7 +388,7 @@ class TraderMonitor {
   }
 
   private startStatusUpdater(): void {
-    const healthFile = path.join(process.cwd(), 'logs', '.healthcheck');
+    const healthFile = path.join('/tmp', '.healthcheck');
 
     // 立即写入一次健康检查文件
     this.writeHealthCheck(healthFile);

@@ -7,7 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const HEALTH_FILE = path.join(process.cwd(), 'logs', '.healthcheck');
+const HEALTH_FILE = path.join('/tmp', '.healthcheck');
 const MAX_STALE_MS = 90000; // 90秒内必须有更新
 
 try {
