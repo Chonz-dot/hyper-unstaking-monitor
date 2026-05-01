@@ -18,6 +18,17 @@ export interface ContractTrader {
   description?: string;   // 描述
   webhook?: string;       // 自定义webhook URL（可选，未配置则使用全局webhook）
   isActive: boolean;      // 是否启用监控
+  alertProfile?: 'trading-analysis' | 'whale-watch'; // 告警模板，默认 trading-analysis
+}
+
+// 逐仓保证金调整事件（来自 userNonFundingLedgerUpdates）
+export interface MarginAdjustmentEvent {
+  timestamp: number;       // 事件时间（ms）
+  address: string;         // 交易员地址
+  asset: string;           // 资产（合约 coin）
+  amount: number;          // 变动金额（正=加保证金，负=减保证金），单位 USDC
+  hash: string;            // ledger 更新的 hash（可能为空字符串）
+  ledgerType: string;      // 原始 ledger type（保留用于调试）
 }
 
 // 监控事件接口
@@ -182,6 +193,7 @@ export interface Config {
   webhook: {
     transferUrl: string;
     contractUrl?: string;
+    whaleUrl?: string;
     timeout: number;
     retries: number;
   };

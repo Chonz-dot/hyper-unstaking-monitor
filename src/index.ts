@@ -2,6 +2,7 @@
 // Promise.withResolvers 需要 Node.js v22+，为v20提供polyfill支持
 import './polyfills';
 
+import * as hl from '@nktkas/hyperliquid';
 import RpcContractMonitor from './services/rpcContractMonitor';
 import HybridRpcContractMonitor from './services/hybridRpcContractMonitor';
 import PureRpcContractMonitor from './services/pureRpcContractMonitor';
@@ -12,7 +13,13 @@ import CacheManager from './cache';
 import WebhookNotifier from './webhook';
 import logger from './logger';
 import config from './config';
-import { ContractEvent, ContractTrader, MonitorEvent } from './types';
+import { ContractEvent, ContractTrader, MonitorEvent, MarginAdjustmentEvent } from './types';
+// 🐋 鲸鱼监控组件
+import PositionStateManager, { AssetPosition } from './managers/PositionStateManager';
+import WhaleOpenTimeStore from './managers/WhaleOpenTimeStore';
+import WhaleAlertFormatter from './formatters/WhaleAlertFormatter';
+import MarginAdjustmentWatcher from './watchers/MarginAdjustmentWatcher';
+import DailyBroadcastScheduler from './schedulers/DailyBroadcastScheduler';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -26,6 +33,13 @@ class TraderMonitor {
   private cache: CacheManager;
   private notifier: WebhookNotifier;
   private traderStats: TraderStatsService;
+  // 🐋 鲸鱼监控相关（独立生命周期；其中 whaleInfoClient 与 whalePositionManager 专供保证金 watcher 和每日播报使用）
+  private whaleInfoClient?: hl.InfoClient;
+  private whalePositionManager?: PositionStateManager;
+  private whaleOpenTimeStore?: WhaleOpenTimeStore;
+  private whaleFormatter?: WhaleAlertFormatter;
+  private marginWatcher?: MarginAdjustmentWatcher;
+  private dailyScheduler?: DailyBroadcastScheduler;
   private isRunning = false;
   private startTime = 0;
 
@@ -102,11 +116,15 @@ class TraderMonitor {
     this.spotMonitor = new RpcSpotMonitor(config.monitoring.addresses);
     this.spotMonitor.on('spotEvent', this.handleSpotTransferEvent.bind(this));
 
+    // 🐋 鲸鱼监控组件初始化（仅当有 alertProfile='whale-watch' 的交易员时）
+    this.initializeWhaleMonitoringIfNeeded();
+
     logger.info('HYPE解锁监控系统初始化完成', {
       transferMonitoring: true,
       contractMonitoring: config.contractMonitoring.enabled,
       contractTraders: config.contractMonitoring.enabled ? config.contractMonitoring.traders.length : 0,
-      spotAddresses: config.monitoring.addresses.length
+      spotAddresses: config.monitoring.addresses.length,
+      whaleMonitoring: !!this.marginWatcher
     });
   }
 
@@ -185,6 +203,33 @@ class TraderMonitor {
         logger.warn('RPC现货监听器未初始化，跳过启动');
       }
 
+      // 🐋 启动鲸鱼监控组件（失败不阻塞主流程）
+      if (this.whaleOpenTimeStore) {
+        try {
+          await this.whaleOpenTimeStore.connect();
+        } catch (error) {
+          logger.error('🐋 WhaleOpenTimeStore Redis 连接失败:', error);
+        }
+      }
+
+      if (this.marginWatcher) {
+        try {
+          await this.marginWatcher.start();
+          logger.info('✅ 鲸鱼保证金监听器启动完成', this.marginWatcher.getStats());
+        } catch (error) {
+          logger.error('🐋 鲸鱼保证金监听器启动失败:', error);
+        }
+      }
+
+      if (this.dailyScheduler) {
+        try {
+          this.dailyScheduler.start();
+          logger.info('✅ 鲸鱼每日播报调度器启动完成');
+        } catch (error) {
+          logger.error('🐋 鲸鱼每日播报调度器启动失败:', error);
+        }
+      }
+
       this.isRunning = true;
 
       logger.info('交易员监控系统启动成功', {
@@ -243,11 +288,102 @@ class TraderMonitor {
     }
   }
 
+  /**
+   * 🐋 鲸鱼监控组件初始化（单独可失败：失败时只禁用鲸鱼功能，不影响主监控）
+   */
+  private initializeWhaleMonitoringIfNeeded(): void {
+    const whaleTraders = config.contractMonitoring.traders.filter(
+      t => t.isActive && t.alertProfile === 'whale-watch'
+    );
+
+    if (whaleTraders.length === 0) {
+      logger.info('🐋 未配置 alertProfile=whale-watch 的交易员，鲸鱼监控组件跳过初始化');
+      return;
+    }
+
+    try {
+      // 独立 InfoClient（不共享 PureRpcContractMonitor 内部的实例，避免耦合）
+      const transport = new hl.HttpTransport({ timeout: 15000, isTestnet: false });
+      this.whaleInfoClient = new hl.InfoClient({ transport });
+      this.whalePositionManager = new PositionStateManager(this.whaleInfoClient);
+      this.whaleOpenTimeStore = new WhaleOpenTimeStore();
+      this.whaleFormatter = new WhaleAlertFormatter(this.whaleOpenTimeStore);
+
+      // 注入到合约监控器：对 whale-watch profile 的交易员改用鲸鱼 formatter
+      if (this.contractMonitor && this.contractMonitor instanceof PureRpcContractMonitor) {
+        this.contractMonitor.setWhaleFormatter(this.whaleFormatter);
+      } else {
+        logger.warn('🐋 合约监控器不是 PureRpcContractMonitor，鲸鱼 formatter 无法注入，open/close 告警将退回默认模板');
+      }
+
+      // 保证金调整 watcher
+      this.marginWatcher = new MarginAdjustmentWatcher(
+        this.whaleInfoClient,
+        whaleTraders,
+        120_000
+      );
+      this.marginWatcher.on('marginAdjustment', this.handleMarginAdjustment.bind(this));
+
+      // 每日播报调度器（09:05 Asia/Shanghai 硬编码）
+      this.dailyScheduler = new DailyBroadcastScheduler(
+        this.whaleInfoClient,
+        this.whalePositionManager,
+        this.whaleOpenTimeStore,
+        whaleTraders,
+        (message) => this.notifier.sendWhaleDailyMessage(message)
+      );
+
+      logger.info('🐋 鲸鱼监控组件初始化完成', {
+        whaleTraders: whaleTraders.length,
+        labels: whaleTraders.map(t => t.label)
+      });
+    } catch (error) {
+      logger.error('🐋 鲸鱼监控组件初始化失败，鲸鱼功能将被禁用:', error);
+      this.whaleInfoClient = undefined;
+      this.whalePositionManager = undefined;
+      this.whaleOpenTimeStore = undefined;
+      this.whaleFormatter = undefined;
+      this.marginWatcher = undefined;
+      this.dailyScheduler = undefined;
+    }
+  }
+
+  /**
+   * 处理逐仓保证金调整事件（来自 MarginAdjustmentWatcher 的快照 diff）
+   */
+  private async handleMarginAdjustment(
+    event: MarginAdjustmentEvent,
+    trader: ContractTrader,
+    positionAfter: AssetPosition | null
+  ): Promise<void> {
+    try {
+      if (!this.whaleFormatter) {
+        logger.warn('🐋 收到保证金调整事件但 whaleFormatter 未初始化，丢弃');
+        return;
+      }
+
+      const alert = await this.whaleFormatter.formatMarginAdjustment(event, trader, positionAfter);
+      const url = this.notifier.resolveContractWebhookUrl(trader);
+      await this.notifier.sendContractAlert(alert, url);
+
+      logger.info('✅ 鲸鱼保证金调整告警已发送', {
+        trader: trader.label,
+        asset: event.asset,
+        delta: event.amount.toFixed(4)
+      });
+    } catch (error) {
+      logger.error('🐋 处理保证金调整事件失败:', error, { event, trader: trader.label });
+    }
+  }
+
   private async handleContractEvent(event: any, trader: ContractTrader): Promise<void> {
     try {
+      const isWhaleWatch = trader.alertProfile === 'whale-watch';
+
       // 🔍 调试日志：追踪事件接收
       logger.info('🔍 [调试] 收到合约事件', {
         trader: trader.label,
+        profile: trader.alertProfile || 'trading-analysis',
         alertType: event.alertType || event.eventType,
         asset: event.asset,
         size: event.size,
@@ -258,28 +394,29 @@ class TraderMonitor {
         eventPath: '主处理器接收事件'
       });
 
-      // 📊 更新交易统计
-      await this.updateTraderStats(event, trader);
+      // 🐋 whale-watch 不走 TraderStatsService（信息流监控，不累积统计）
+      if (!isWhaleWatch) {
+        // 📊 更新交易统计
+        await this.updateTraderStats(event, trader);
 
-      // 🆕 获取统计数据并添加到事件中
-      const stats = await this.traderStats.getTraderStats(trader.address);
-      const formattedStats = this.traderStats.formatStatsForDisplay(stats);
-      
-      // 将统计数据添加到事件中
-      event.traderStats = formattedStats;
+        // 🆕 获取统计数据并添加到事件中
+        const stats = await this.traderStats.getTraderStats(trader.address);
+        const formattedStats = this.traderStats.formatStatsForDisplay(stats);
 
-      // 统一发送交易分析告警（已经是格式化的告警对象）
-      // 优先使用交易员的自定义webhook，否则使用全局配置
-      await this.notifier.sendContractAlert(event, trader.webhook);
-      
+        // 将统计数据添加到事件中
+        event.traderStats = formattedStats;
+      }
+
+      // 按 profile 解析 webhook URL（whale-watch 优先走 WHALE_WEBHOOK_URL）
+      const webhookUrl = this.notifier.resolveContractWebhookUrl(trader);
+      await this.notifier.sendContractAlert(event, webhookUrl);
+
       // 🔍 调试日志：确认发送
       logger.info('✅ [调试] 合约事件已发送到webhook', {
         trader: trader.label,
+        profile: trader.alertProfile || 'trading-analysis',
         alertType: event.alertType || event.eventType,
-        useAdvancedAnalysis: event.useAdvancedAnalysis || false,
-        totalTrades: formattedStats.totalTrades,
-        winRate: formattedStats.winRate,
-        usingCustomWebhook: !!trader.webhook
+        routedTo: webhookUrl ? webhookUrl.substring(0, 30) + '...' : '(none)'
       });
 
     } catch (error) {
@@ -364,6 +501,17 @@ class TraderMonitor {
 
   private async cleanup(): Promise<void> {
     try {
+      // 🐋 停止鲸鱼组件（先停，因为它们依赖 Redis）
+      if (this.dailyScheduler) {
+        this.dailyScheduler.stop();
+      }
+      if (this.marginWatcher) {
+        await this.marginWatcher.stop();
+      }
+      if (this.whaleOpenTimeStore) {
+        await this.whaleOpenTimeStore.disconnect();
+      }
+
       // 停止合约监控
       if (this.contractMonitor) {
         await this.contractMonitor.stop();

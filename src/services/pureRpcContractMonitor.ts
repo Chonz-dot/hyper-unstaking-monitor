@@ -6,6 +6,7 @@ import { PositionStateManager } from '../managers/PositionStateManager';
 import { TradeClassificationEngine, AnalyzedContractEvent } from '../managers/TradeClassificationEngine';
 import { PositionAnalysisEngine } from '../managers/PositionAnalysisEngine';
 import { TradingAnalysisSystem } from '../managers/TradingAnalysisSystem';
+import { WhaleAlertFormatter } from '../formatters/WhaleAlertFormatter';
 
 /**
  * 纯净RPC合约监控器 
@@ -25,6 +26,9 @@ export class PureRpcContractMonitor extends EventEmitter {
     private classificationEngine: TradeClassificationEngine;
     private analysisEngine: PositionAnalysisEngine;
     private alertSystem: TradingAnalysisSystem;
+
+    // 🐋 可选：鲸鱼告警格式化器（由 TraderMonitor 外部注入，为 alertProfile='whale-watch' 的交易员服务）
+    private whaleFormatter?: WhaleAlertFormatter;
 
     // 轮询配置 - 优化API调用频率，避免429错误
     private readonly POLLING_INTERVAL = 120000; // 保持30秒轮询间隔
@@ -102,6 +106,21 @@ export class PureRpcContractMonitor extends EventEmitter {
                 '风险评估引擎',
                 '历史订单过滤' // 新增功能
             ]
+        });
+    }
+
+    /**
+     * 注入鲸鱼告警格式化器。
+     * 为 alertProfile='whale-watch' 的交易员改用该 formatter 生成消息；
+     * 未注入或未设置 profile 的交易员继续走默认 TradingAnalysisSystem。
+     * 由 TraderMonitor 在初始化阶段调用一次。
+     */
+    setWhaleFormatter(formatter: WhaleAlertFormatter): void {
+        this.whaleFormatter = formatter;
+        const whaleCount = this.traders.filter(t => t.alertProfile === 'whale-watch').length;
+        logger.info('🐋 已注入 WhaleAlertFormatter', {
+            whaleTraders: whaleCount,
+            otherTraders: this.traders.length - whaleCount
         });
     }
 
@@ -707,22 +726,35 @@ export class PureRpcContractMonitor extends EventEmitter {
                     positionChange: analyzedEvent.positionChange
                 });
 
-                // 创建交易分析告警
-                const tradingAlert = await this.alertSystem.createTradingAlert(analyzedEvent, trader);
+                // 🆕 alertProfile 路由：whale-watch 走干净字段模板，其余保持 TradingAnalysisSystem
+                let alertToSend: ContractWebhookAlert | null;
+                const isWhaleWatch = trader.alertProfile === 'whale-watch' && !!this.whaleFormatter;
 
-                logger.info(`🚨 [调试] 即将发送交易分析告警`, {
+                if (isWhaleWatch) {
+                    alertToSend = await this.whaleFormatter!.formatContractEvent(analyzedEvent, trader);
+                    if (!alertToSend) {
+                        // 鲸鱼 formatter 只处理开仓/平仓，其他事件类型返回 null → 不发送
+                        logger.debug(`🐋 [whale-watch] 事件类型不在鲸鱼监控范围，跳过`, {
+                            trader: trader.label,
+                            asset: analyzedEvent.asset,
+                            eventType: analyzedEvent.eventType
+                        });
+                        return;
+                    }
+                } else {
+                    alertToSend = await this.alertSystem.createTradingAlert(analyzedEvent, trader);
+                }
+
+                logger.info(`🚨 [调试] 即将发送合约告警`, {
                     trader: trader.label,
+                    profile: trader.alertProfile || 'trading-analysis',
                     asset: analyzedEvent.asset,
-                    alertType: tradingAlert.alertType,
-                    alertLevel: tradingAlert.alertLevel,
-                    useAdvancedAnalysis: tradingAlert.useAdvancedAnalysis,
-                    eventPath: '交易分析路径',
-                    riskLevel: tradingAlert.positionAnalysis?.riskLevel,
-                    signalStrength: tradingAlert.positionAnalysis?.signalStars
+                    alertType: alertToSend.alertType,
+                    route: isWhaleWatch ? 'whale-watch' : 'trading-analysis'
                 });
 
-                // 发射交易分析告警事件 
-                this.emit('contractEvent', tradingAlert, trader);
+                // 发射合约告警事件（上层根据 profile 路由 webhook URL）
+                this.emit('contractEvent', alertToSend, trader);
                 this.stats.totalEvents++;
             } else {
                 logger.warn(`⚠️ [调试] 交易分类失败，事件被跳过`, {

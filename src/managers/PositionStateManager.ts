@@ -219,16 +219,44 @@ export class PositionStateManager {
                     const entryPrice = parseFloat(assetPos.position.entryPx || '0');
                     const unrealizedPnl = parseFloat(assetPos.position.unrealizedPnl || '0');
                     const notionalValue = size * entryPrice;
-                    
+
+                    // 🆕 提取鲸鱼监控需要的原始字段
+                    const rawPosition = assetPos.position as any;
+                    const rawLeverage = rawPosition.leverage;
+                    const leverage = rawLeverage
+                        ? {
+                            type: rawLeverage.type as 'isolated' | 'cross',
+                            value: Number(rawLeverage.value) || 1
+                        }
+                        : undefined;
+                    const marginUsed = rawPosition.marginUsed !== undefined
+                        ? parseFloat(rawPosition.marginUsed)
+                        : undefined;
+                    const liquidationPxRaw = rawPosition.liquidationPx;
+                    const liquidationPx = liquidationPxRaw === null || liquidationPxRaw === undefined
+                        ? null
+                        : parseFloat(liquidationPxRaw);
+                    const cumFundingAllTime = rawPosition.cumFunding?.allTime !== undefined
+                        ? parseFloat(rawPosition.cumFunding.allTime)
+                        : undefined;
+                    const returnOnEquity = rawPosition.returnOnEquity !== undefined
+                        ? parseFloat(rawPosition.returnOnEquity)
+                        : undefined;
+
                     positions.push({
                         asset: assetPos.position.coin,
                         size,
                         side,
                         entryPrice,
                         unrealizedPnl,
-                        notionalValue
+                        notionalValue,
+                        leverage,
+                        marginUsed,
+                        liquidationPx,
+                        cumFundingAllTime,
+                        returnOnEquity
                     });
-                    
+
                     totalNotionalValue += notionalValue;
                 }
             }
@@ -342,6 +370,15 @@ export interface AssetPosition {
     entryPrice: number;
     unrealizedPnl: number;
     notionalValue?: number;
+    // 🆕 鲸鱼监控所需字段（均来自 Hyperliquid clearinghouseState 原始 API）
+    leverage?: {
+        type: 'isolated' | 'cross';
+        value: number;
+    };
+    marginUsed?: number;           // 占用保证金（USDC）
+    liquidationPx?: number | null; // 强平价格
+    cumFundingAllTime?: number;    // 累计资金费（全时段）
+    returnOnEquity?: number;       // ROE（小数，0.15 表示 +15%）
 }
 
 export interface PositionChangeAnalysis {

@@ -7,12 +7,14 @@ import { formatTradeSize, formatPrice, formatCurrency } from './utils/formatters
 export class WebhookNotifier {
   private transferWebhookUrl: string;
   private contractWebhookUrl: string | undefined;
+  private whaleWebhookUrl: string | undefined;
   private timeout: number;
   private maxRetries: number;
 
   constructor() {
     this.transferWebhookUrl = config.webhook.transferUrl;
     this.contractWebhookUrl = config.webhook.contractUrl;
+    this.whaleWebhookUrl = config.webhook.whaleUrl;
     this.timeout = config.webhook.timeout;
     this.maxRetries = config.webhook.retries;
 
@@ -23,6 +25,24 @@ export class WebhookNotifier {
     if (!this.contractWebhookUrl) {
       logger.warn('合约监控Webhook URL未配置，合约警报通知将被禁用');
     }
+
+    if (!this.whaleWebhookUrl) {
+      logger.warn('鲸鱼监控Webhook URL (WHALE_WEBHOOK_URL) 未配置，鲸鱼专属告警将降级到 CONTRACT_WEBHOOK_URL');
+    }
+  }
+
+  /**
+   * 根据交易员的 alertProfile 决定发送到哪个 webhook
+   * - whale-watch: 优先走 WHALE_WEBHOOK_URL，降级 CONTRACT_WEBHOOK_URL
+   * - 其他:       走 trader.webhook（若有）或 CONTRACT_WEBHOOK_URL
+   * 返回适合直接传给 sendContractAlert 的 URL。
+   */
+  resolveContractWebhookUrl(trader: { webhook?: string; alertProfile?: string }): string | undefined {
+    if (trader.webhook) return trader.webhook;
+    if (trader.alertProfile === 'whale-watch') {
+      return this.whaleWebhookUrl || this.contractWebhookUrl;
+    }
+    return this.contractWebhookUrl;
   }
 
   async sendAlert(alert: WebhookAlert): Promise<void> {
@@ -318,6 +338,53 @@ export class WebhookNotifier {
 
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * 发送一条纯文本格式的鲸鱼播报消息（模块二：每日持仓播报）
+   * 使用 WHALE_WEBHOOK_URL（未配置则降级到 CONTRACT_WEBHOOK_URL）。
+   * 若两者都未配置，记录 warn 并返回。
+   */
+  async sendWhaleDailyMessage(message: string): Promise<void> {
+    const url = this.whaleWebhookUrl || this.contractWebhookUrl;
+    if (!url) {
+      logger.warn('🐋 鲸鱼播报 Webhook URL 未配置（WHALE_WEBHOOK_URL & CONTRACT_WEBHOOK_URL 均空），跳过发送');
+      return;
+    }
+
+    const payload = {
+      text: message,
+      username: 'Whale Daily Report 🐋',
+      icon_emoji: ':whale:',
+      parseUrls: false
+    };
+
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      try {
+        const response = await axios.post(url, payload, {
+          timeout: this.timeout,
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (response.status >= 400) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        logger.info(`🐋 鲸鱼每日播报发送成功`, { attempt, messageLength: message.length });
+        return;
+      } catch (error) {
+        lastError = error as Error;
+        logger.warn(`🐋 鲸鱼每日播报发送失败 (尝试 ${attempt}/${this.maxRetries}):`, {
+          error: lastError.message
+        });
+        if (attempt < this.maxRetries) {
+          await this.sleep(this.getRetryDelay(attempt));
+        }
+      }
+    }
+    logger.error(`🐋 鲸鱼每日播报发送完全失败`, {
+      attempts: this.maxRetries,
+      finalError: lastError?.message
+    });
   }
 }
 

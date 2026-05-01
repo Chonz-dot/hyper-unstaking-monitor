@@ -55,11 +55,6 @@ const WATCHED_ADDRESSES: WatchedAddress[] = [
 
 // 合约交易员监控列表
 const CONTRACT_TRADERS: ContractTrader[] = [
-  { address: '0xfa6af5f4f7440ce389a1e650991eea45c161e13e', label: '交易员1', description: 'hyperdash交易员', isActive: true },
-  { address: '0xa04a4b7b7c37dbd271fdc57618e9cb9836b250bf', label: '交易员2', description: 'hyperdash交易员', isActive: true },
-  { address: '0xb8b9e3097c8b1dddf9c5ea9d48a7ebeaf09d67d2', label: '交易员3', description: 'hyperdash交易员', isActive: true },
-  { address: '0xd5ff5491f6f3c80438e02c281726757baf4d1070', label: '交易员4', description: 'hyperdash交易员', isActive: true },
-  { address: '0x044d0932b02f5045bc00e0a6818b7f98ef504681', label: '20倍交易员5', description: 'hyperdash交易员', isActive: true },
   { address: '0xbb876071a63bc4d9bfcf46b012b4437ea7ff4281', label: 'Andrew Kang--kol', description: 'kol', isActive: true },
   {
     address: '0xc32235231d29831a2cb2a11e3f9c7f38160fc1dd',
@@ -79,6 +74,36 @@ const CONTRACT_TRADERS: ContractTrader[] = [
     description: 'Hyperliquid ZEC最大多头持仓者，48K ZEC @$409.87',
     webhook: process.env.ZEC_WHALE_WEBHOOK,
     isActive: true
+  },
+
+  // ========== 鲸鱼钱包监控（alertProfile=whale-watch，使用 WHALE_WEBHOOK_URL） ==========
+  {
+    address: '0xa5b0edf6b55128e0ddae8e51ac538c3188401d41',
+    label: '鲸鱼钱包1',
+    description: 'whale wallet monitoring',
+    isActive: true,
+    alertProfile: 'whale-watch'
+  },
+  {
+    address: '0x6C8512516Ce5669d35113A11Ca8B8DE322fD84F6',
+    label: '鲸鱼钱包2',
+    description: 'whale wallet monitoring',
+    isActive: true,
+    alertProfile: 'whale-watch'
+  },
+  {
+    address: '0xFd423284f6a9C73A2a3D53cAb8921D6533533d97',
+    label: '鲸鱼钱包3',
+    description: 'whale wallet monitoring',
+    isActive: true,
+    alertProfile: 'whale-watch'
+  },
+  {
+    address: '0xA875890465dA20062bCF3b024Bf7d54E69C725a8',
+    label: '鲸鱼钱包4',
+    description: 'whale wallet monitoring',
+    isActive: true,
+    alertProfile: 'whale-watch'
   }
 ];
 
@@ -101,6 +126,7 @@ export const config: Config = {
   webhook: {
     transferUrl: process.env.WEBHOOK_URL || '',
     contractUrl: process.env.CONTRACT_WEBHOOK_URL,
+    whaleUrl: process.env.WHALE_WEBHOOK_URL,
     timeout: parseInt(process.env.WEBHOOK_TIMEOUT || '5000'),
     retries: parseInt(process.env.WEBHOOK_RETRIES || '3'),
   },
